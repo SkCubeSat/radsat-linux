@@ -83,6 +83,20 @@
 		>;
 	};
 
+	dcan0_pins: dcan0_pins {
+		pinctrl-single,pins = <
+			0x150 0x12  /* P9.24 (UART1_TXD) -> DCAN0_TX */
+			0x154 0x32  /* P9.26 (UART1_RXD) -> DCAN0_RX */
+		>;
+	};
+
+	dcan1_pins: dcan1_pins {
+		pinctrl-single,pins = <
+			0x158 0x12  /* P9.20 -> DCAN1_TX */
+			0x15C 0x32  /* P9.19 -> DCAN1_RX */
+		>;
+	};
+
 };
 
 &i2c1 {
@@ -147,5 +161,19 @@
 		ti,chan-step-sampledelay = <0x0 0x0 0x0 0x0 0x0 0x0 0x0>;
 	};
 };
+
+
+&dcan0 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&dcan0_pins>;
+};
+
+&dcan1 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&dcan1_pins>;
+};
+
 
 
