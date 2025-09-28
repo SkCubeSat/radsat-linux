@@ -90,12 +90,40 @@
 		>;
 	};
 
+
 	dcan0_pins: dcan0_pins {
 		pinctrl-single,pins = <
-			0x120 (PIN_OUTPUT_PULLUP | MUX_MODE0)  /* P9.20 -> DCAN0_TX */
-			0x124 (PIN_OUTPUT_PULLUP | MUX_MODE0)  /* P9.19 -> DCAN0_RX */
+			0x120 (PIN_OUTPUT_PULLUP | MUX_MODE2)  /* P9.20 -> DCAN0_TX */
+			0x124 (PIN_OUTPUT_PULLUP | MUX_MODE2)  /* P9.19 -> DCAN0_RX */
 		>;
 	};
+
+	dcan1_pins_default: dcan1_pins_default {
+		pinctrl-single,pins = <
+			AM33XX_IOPAD(0x968, PIN_INPUT_PULLUP  | MUX_MODE2) /* uart1_rxd -> dcan1_rx (P9.26) */
+			AM33XX_IOPAD(0x96C, PIN_OUTPUT       | MUX_MODE2) /* uart1_txd -> dcan1_tx (P9.24) */
+		>;
+	};
+
+	dcan0_pins_default: dcan0_pins_default {
+		pinctrl-single,pins = <
+			AM33XX_IOPAD(0x978, PIN_INPUT_PULLUP  | MUX_MODE2) /* i2c2_sda -> dcan0_rx (P9.20) */
+			AM33XX_IOPAD(0x97C, PIN_OUTPUT       | MUX_MODE2) /* i2c2_scl -> dcan0_tx (P9.19) */
+		>;
+	};
+
+	dcan0_clk: dcan0_clk {
+		#clock-cells = <0>;
+		compatible = "fixed-clock";
+		clock_frequency = <24000000>;	
+	};
+
+	dcan1_clk: dcan1_clk {
+		#clock-cells = <0>;
+		compatible = "fixed-clock";
+		clock_frequency = <24000000>;	
+	};
+	
 
 };
 
@@ -110,13 +138,13 @@
 &uart1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart1_pins>;
-	status = "okay";
+	status = "disabled";
 };
 
 &uart2 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart2_pins>;
-	status = "okay";
+	status = "disabled";
 };
 
 &uart3 {
@@ -164,16 +192,33 @@
 
 
 &dcan0 {
-	status = "okay";
+	compatible = "ti,am3352-d_can", "bosch,d_can";
+	ti,instance = <0>;    /* DCAN0 instance */
+	status = "disabled";
 	pinctrl-names = "default";
-	pinctrl-0 = <&dcan0_pins>;
+	pinctrl-0 = <&dcan0_pins_default>;
+	clocks = <&dcan0_fck>;
+	clock-names = "fck";
 };
 
 &dcan1 {
+	compatible = "ti,am3352-d_can", "bosch,d_can";
+	ti,instance = <1>;    /* DCAN0 instance */
 	status = "okay";
 	pinctrl-names = "default";
-	pinctrl-0 = <&dcan1_pins>;
+	pinctrl-0 = <&dcan1_pins_default>;
+	clocks = <&dcan1_fck>;
+	clock-names = "fck";
 };
 
+/* Disable CPSW Ethernet */
+&mac {
+    status = "disabled";
+};
 
-
+&cpsw_emac0 {
+    status = "disabled";
+};
+&cpsw_emac1 {
+    status = "disabled";
+};
