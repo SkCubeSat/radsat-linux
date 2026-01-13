@@ -83,32 +83,18 @@
 		>;
 	};
 
-	dcan1_pins: dcan1_pins {
-		pinctrl-single,pins = <
-			0x150 0x12  /* P9.24 (UART1_TXD) -> DCAN1_TX */
-			0x154 0x32  /* P9.26 (UART1_RXD) -> DCAN1_RX */
-		>;
-	};
-
-
-	dcan0_pins: dcan0_pins {
-		pinctrl-single,pins = <
-			0x120 (PIN_OUTPUT_PULLUP | MUX_MODE2)  /* P9.20 -> DCAN0_TX */
-			0x124 (PIN_OUTPUT_PULLUP | MUX_MODE2)  /* P9.19 -> DCAN0_RX */
-		>;
-	};
 
 	dcan1_pins_default: dcan1_pins_default {
 		pinctrl-single,pins = <
-			AM33XX_IOPAD(0x968, PIN_INPUT_PULLUP  | MUX_MODE2) /* uart1_rxd -> dcan1_rx (P9.26) */
-			AM33XX_IOPAD(0x96C, PIN_OUTPUT       | MUX_MODE2) /* uart1_txd -> dcan1_tx (P9.24) */
+			0x184 (PIN_INPUT_PULLUP | MUX_MODE2) /* P9_24: uart1_txd.d_can1_rx */
+                        0x180 (PIN_OUTPUT_PULLUP  | MUX_MODE2) /* P9_26: uart1_rxd.d_can1_tx */
 		>;
 	};
 
 	dcan0_pins_default: dcan0_pins_default {
 		pinctrl-single,pins = <
-			AM33XX_IOPAD(0x978, PIN_INPUT_PULLUP  | MUX_MODE2) /* i2c2_sda -> dcan0_rx (P9.20) */
-			AM33XX_IOPAD(0x97C, PIN_OUTPUT       | MUX_MODE2) /* i2c2_scl -> dcan0_tx (P9.19) */
+			AM33XX_IOPAD(0x978, PIN_OUTPUT_PULLUP  | MUX_MODE2) /* i2c2_sda -> dcan0_tx (P9.20) */
+			AM33XX_IOPAD(0x97C, PIN_INPUT_PULLUP       | MUX_MODE2) /* i2c2_scl -> dcan0_rx (P9.19) */
 		>;
 	};
 
@@ -193,22 +179,15 @@
 
 &dcan0 {
 	compatible = "ti,am3352-d_can", "bosch,d_can";
-	ti,instance = <0>;    /* DCAN0 instance */
-	status = "disabled";
+	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&dcan0_pins_default>;
-	clocks = <&dcan0_fck>;
-	clock-names = "fck";
 };
 
 &dcan1 {
-	compatible = "ti,am3352-d_can", "bosch,d_can";
-	ti,instance = <1>;    /* DCAN0 instance */
 	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&dcan1_pins_default>;
-	clocks = <&dcan1_fck>;
-	clock-names = "fck";
 };
 
 /* Disable CPSW Ethernet */
@@ -220,5 +199,9 @@
     status = "disabled";
 };
 &cpsw_emac1 {
+    status = "disabled";
+};
+
+&i2c2 {
     status = "disabled";
 };
