@@ -93,8 +93,8 @@
 
 	dcan0_pins_default: dcan0_pins_default {
 		pinctrl-single,pins = <
-			AM33XX_IOPAD(0x978, PIN_OUTPUT_PULLUP  | MUX_MODE2) /* i2c2_sda -> dcan0_tx (P9.20) */
-			AM33XX_IOPAD(0x97C, PIN_INPUT_PULLUP       | MUX_MODE2) /* i2c2_scl -> dcan0_rx (P9.19) */
+			AM33XX_IOPAD(0x920, PIN_INPUT_PULLUP  | MUX_MODE1) /* MII1_TXD2 -> dcan0_rx () */
+			AM33XX_IOPAD(0x91c, PIN_OUTPUT_PULLUP | MUX_MODE1) /* MII1_TXD3 -> dcan0_tx () */
 		>;
 	};
 
@@ -202,6 +202,3 @@
     status = "disabled";
 };
 
-&i2c2 {
-    status = "disabled";
-};
