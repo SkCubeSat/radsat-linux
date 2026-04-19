@@ -84,13 +84,6 @@
 	};
 
 
-	dcan1_pins_default: dcan1_pins_default {
-		pinctrl-single,pins = <
-			0x184 (PIN_INPUT_PULLUP | MUX_MODE2) /* P9_24: uart1_txd.d_can1_rx */
-                        0x180 (PIN_OUTPUT_PULLUP  | MUX_MODE2) /* P9_26: uart1_rxd.d_can1_tx */
-		>;
-	};
-
 	dcan0_pins_default: dcan0_pins_default {
 		pinctrl-single,pins = <
 			AM33XX_IOPAD(0x920, PIN_INPUT_PULLUP  | MUX_MODE1) /* MII1_TXD2 -> dcan0_rx () */
@@ -104,12 +97,6 @@
 		clock_frequency = <24000000>;	
 	};
 
-	dcan1_clk: dcan1_clk {
-		#clock-cells = <0>;
-		compatible = "fixed-clock";
-		clock_frequency = <24000000>;	
-	};
-	
 
 };
 
@@ -124,19 +111,17 @@
 &uart1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart1_pins>;
-	status = "disabled";
+	status = "okay";
 };
 
 &uart2 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart2_pins>;
-	status = "disabled";
+	status = "okay";
 };
 
 &uart3 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&uart3_pins>;
-	status = "okay";
+	status = "disabled";
 };
 
 &uart4 {
@@ -184,11 +169,6 @@
 	pinctrl-0 = <&dcan0_pins_default>;
 };
 
-&dcan1 {
-	status = "okay";
-	pinctrl-names = "default";
-	pinctrl-0 = <&dcan1_pins_default>;
-};
 
 /* Disable CPSW Ethernet */
 &mac {
