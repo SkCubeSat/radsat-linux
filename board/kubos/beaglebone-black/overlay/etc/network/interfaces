@@ -16,3 +16,15 @@ iface sl0 inet static
         pointopoint 192.168.0.1
         pre-up slattach -s 115200 -p cslip /dev/ttyS5 &
         post-up route add 192.168.0.2 dev lo
+
+auto can0
+iface can0 inet manual
+    pre-up /sbin/ip link set $IFACE type can bitrate 500000
+    up /sbin/ip link set $IFACE up
+    down /sbin/ip link set $IFACE down
+
+auto can1
+iface can1 inet manual
+    pre-up /sbin/ip link set $IFACE type can bitrate 500000
+    up /sbin/ip link set $IFACE up
+    down /sbin/ip link set $IFACE down

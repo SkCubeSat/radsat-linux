@@ -83,6 +83,21 @@
 		>;
 	};
 
+
+	dcan0_pins_default: dcan0_pins_default {
+		pinctrl-single,pins = <
+			AM33XX_IOPAD(0x920, PIN_INPUT_PULLUP  | MUX_MODE1) /* MII1_TXD2 -> dcan0_rx () */
+			AM33XX_IOPAD(0x91c, PIN_OUTPUT_PULLUP | MUX_MODE1) /* MII1_TXD3 -> dcan0_tx () */
+		>;
+	};
+
+	dcan0_clk: dcan0_clk {
+		#clock-cells = <0>;
+		compatible = "fixed-clock";
+		clock_frequency = <24000000>;	
+	};
+
+
 };
 
 &i2c1 {
@@ -106,9 +121,7 @@
 };
 
 &uart3 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&uart3_pins>;
-	status = "okay";
+	status = "disabled";
 };
 
 &uart4 {
@@ -148,4 +161,24 @@
 	};
 };
 
+
+&dcan0 {
+	compatible = "ti,am3352-d_can", "bosch,d_can";
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&dcan0_pins_default>;
+};
+
+
+/* Disable CPSW Ethernet */
+&mac {
+    status = "disabled";
+};
+
+&cpsw_emac0 {
+    status = "disabled";
+};
+&cpsw_emac1 {
+    status = "disabled";
+};
 
