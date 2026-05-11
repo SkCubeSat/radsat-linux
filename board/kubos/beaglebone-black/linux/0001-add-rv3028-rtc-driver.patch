@@ -1,0 +1,193 @@
+diff --git a/drivers/rtc/Kconfig b/drivers/rtc/Kconfig
+index 2a524244..402eb0fb 100644
+--- a/drivers/rtc/Kconfig
++++ b/drivers/rtc/Kconfig
+@@ -584,6 +584,16 @@ config RTC_DRV_EM3027
+ 	  This driver can also be built as a module. If so, the module
+ 	  will be called rtc-em3027.
+ 
++config RTC_DRV_RV3028
++	tristate "Micro Crystal RV-3028"
++	depends on I2C
++	help
++	  If you say yes here you get support for the Micro Crystal
++	  RV-3028 RTC chip.
++
++	  This driver can also be built as a module. If so, the module
++	  will be called rtc-rv3028.
++
+ config RTC_DRV_RV3029C2
+ 	tristate "Micro Crystal RTC"
+ 	help
+diff --git a/drivers/rtc/Makefile b/drivers/rtc/Makefile
+index 231f7645..dcfeed29 100644
+--- a/drivers/rtc/Makefile
++++ b/drivers/rtc/Makefile
+@@ -125,6 +125,7 @@ obj-$(CONFIG_RTC_DRV_RP5C01)	+= rtc-rp5c01.o
+ obj-$(CONFIG_RTC_DRV_RS5C313)	+= rtc-rs5c313.o
+ obj-$(CONFIG_RTC_DRV_RS5C348)	+= rtc-rs5c348.o
+ obj-$(CONFIG_RTC_DRV_RS5C372)	+= rtc-rs5c372.o
++obj-$(CONFIG_RTC_DRV_RV3028)	+= rtc-rv3028.o
+ obj-$(CONFIG_RTC_DRV_RV3029C2)	+= rtc-rv3029c2.o
+ obj-$(CONFIG_RTC_DRV_RV8803)	+= rtc-rv8803.o
+ obj-$(CONFIG_RTC_DRV_RX4581)	+= rtc-rx4581.o
+diff --git a/drivers/rtc/rtc-rv3028.c b/drivers/rtc/rtc-rv3028.c
+new file mode 100644
+index 00000000..e51b9cf7
+--- /dev/null
++++ b/drivers/rtc/rtc-rv3028.c
+@@ -0,0 +1,153 @@
++#include <linux/module.h>
++#include <linux/i2c.h>
++#include <linux/rtc.h>
++#include <linux/bcd.h>
++
++/* RV3028 register map (minimal subset) */
++#define RV3028_SEC     0x00
++#define RV3028_MIN     0x01
++#define RV3028_HOUR    0x02
++#define RV3028_WDAY    0x03
++#define RV3028_DAY     0x04
++#define RV3028_MONTH   0x05
++#define RV3028_YEAR    0x06
++
++struct rv3028_data {
++    struct i2c_client *client;
++    struct rtc_device *rtc;
++};
++
++/* ---------- I2C helpers ---------- */
++
++static int rv3028_read_reg(struct i2c_client *client, u8 reg)
++{
++    return i2c_smbus_read_byte_data(client, reg);
++}
++
++static int rv3028_write_reg(struct i2c_client *client, u8 reg, u8 val)
++{
++    return i2c_smbus_write_byte_data(client, reg, val);
++}
++
++/* ---------- RTC ops ---------- */
++
++static int rv3028_get_time(struct device *dev, struct rtc_time *tm)
++{
++    struct i2c_client *client = to_i2c_client(dev);
++    int ret;
++
++    ret = rv3028_read_reg(client, RV3028_SEC);
++    if (ret < 0) return ret;
++    tm->tm_sec = bcd2bin(ret & 0x7F);
++
++    ret = rv3028_read_reg(client, RV3028_MIN);
++    if (ret < 0) return ret;
++    tm->tm_min = bcd2bin(ret & 0x7F);
++
++    ret = rv3028_read_reg(client, RV3028_HOUR);
++    if (ret < 0) return ret;
++    tm->tm_hour = bcd2bin(ret & 0x3F);
++
++    ret = rv3028_read_reg(client, RV3028_WDAY);
++    if (ret < 0) return ret;
++    tm->tm_wday = bcd2bin(ret & 0x07);
++
++    ret = rv3028_read_reg(client, RV3028_DAY);
++    if (ret < 0) return ret;
++    tm->tm_mday = bcd2bin(ret & 0x3F);
++
++    ret = rv3028_read_reg(client, RV3028_MONTH);
++    if (ret < 0) return ret;
++    tm->tm_mon = bcd2bin(ret & 0x1F) - 1;
++
++    ret = rv3028_read_reg(client, RV3028_YEAR);
++    if (ret < 0) return ret;
++    tm->tm_year = bcd2bin(ret) + 100; /* year since 1900 -> 2000 base */
++
++    return 0;
++}
++
++static int rv3028_set_time(struct device *dev, struct rtc_time *tm)
++{
++    struct i2c_client *client = to_i2c_client(dev);
++
++    rv3028_write_reg(client, RV3028_SEC,   bin2bcd(tm->tm_sec));
++    rv3028_write_reg(client, RV3028_MIN,   bin2bcd(tm->tm_min));
++    rv3028_write_reg(client, RV3028_HOUR,  bin2bcd(tm->tm_hour));
++    rv3028_write_reg(client, RV3028_WDAY,  bin2bcd(tm->tm_wday));
++    rv3028_write_reg(client, RV3028_DAY,   bin2bcd(tm->tm_mday));
++    rv3028_write_reg(client, RV3028_MONTH, bin2bcd(tm->tm_mon + 1));
++    rv3028_write_reg(client, RV3028_YEAR,  bin2bcd(tm->tm_year - 100));
++
++    return 0;
++}
++
++static const struct rtc_class_ops rv3028_rtc_ops = {
++    .read_time  = rv3028_get_time,
++    .set_time   = rv3028_set_time,
++};
++
++/* ---------- Probe / Remove ---------- */
++
++static int rv3028_probe(struct i2c_client *client,
++                        const struct i2c_device_id *id)
++{
++    struct rv3028_data *data;
++
++    data = devm_kzalloc(&client->dev, sizeof(*data), GFP_KERNEL);
++    if (!data)
++        return -ENOMEM;
++
++    data->client = client;
++
++    data->rtc = devm_rtc_device_register(&client->dev,
++                                         "rv3028",
++                                         &rv3028_rtc_ops,
++                                         THIS_MODULE);
++    if (IS_ERR(data->rtc))
++        return PTR_ERR(data->rtc);
++
++    i2c_set_clientdata(client, data);
++
++    dev_info(&client->dev, "RV3028 RTC initialized\n");
++    return 0;
++}
++
++static int rv3028_remove(struct i2c_client *client)
++{
++    return 0;
++}
++
++/* ---------- I2C ID ---------- */
++
++static const struct i2c_device_id rv3028_id[] = {
++    { "rv3028", 0 },
++    { }
++};
++MODULE_DEVICE_TABLE(i2c, rv3028_id);
++
++#ifdef CONFIG_OF
++static const struct of_device_id rv3028_of_match[] = {
++    { .compatible = "microcrystal,rv3028" },
++    { }
++};
++MODULE_DEVICE_TABLE(of, rv3028_of_match);
++#endif
++
++/* ---------- Driver ---------- */
++
++static struct i2c_driver rv3028_driver = {
++    .driver = {
++        .name = "rtc-rv3028",
++        .of_match_table = of_match_ptr(rv3028_of_match),
++    },
++    .probe    = rv3028_probe,
++    .remove   = rv3028_remove,
++    .id_table = rv3028_id,
++};
++
++module_i2c_driver(rv3028_driver);
++
++MODULE_AUTHOR("Backported minimal driver");
++MODULE_DESCRIPTION("Minimal RV3028 RTC driver (4.4 compatible)");
++MODULE_LICENSE("GPL");
+\ No newline at end of file
