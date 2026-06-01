@@ -1,4 +1,4 @@
-From 0f66880c994e565e41c4ecbd8140daec1377c0bc Mon Sep 17 00:00:00 2001
+From c5a643e2e9d1ae364d52932aed089bd7a46a0929 Mon Sep 17 00:00:00 2001
 From: Radsat Developers <dev@radsat.local>
 Date: Sun, 31 May 2026 19:57:19 -0600
 Subject: [PATCH] i2c: add slave frame queue backend
@@ -9,8 +9,8 @@ The backend is intentionally not CSP-aware; it preserves transaction boundaries 
 ---
  drivers/i2c/Kconfig            |  13 ++
  drivers/i2c/Makefile           |   1 +
- drivers/i2c/i2c-slave-frameq.c | 275 +++++++++++++++++++++++++++++++++
- 3 files changed, 289 insertions(+)
+ drivers/i2c/i2c-slave-frameq.c | 346 +++++++++++++++++++++++++++++++++
+ 3 files changed, 360 insertions(+)
  create mode 100644 drivers/i2c/i2c-slave-frameq.c
 
 diff --git a/drivers/i2c/Kconfig b/drivers/i2c/Kconfig
@@ -51,11 +51,10 @@ index 45095b3..67cca00 100644
  CFLAGS_i2c-core.o := -Wno-deprecated-declarations
 diff --git a/drivers/i2c/i2c-slave-frameq.c b/drivers/i2c/i2c-slave-frameq.c
 new file mode 100644
-index 0000000..73ed36c
+index 0000000..99b6def
 --- /dev/null
 +++ b/drivers/i2c/i2c-slave-frameq.c
-@@ -0,0 +1,275 @@
-+// SPDX-License-Identifier: GPL-2.0-only
+@@ -0,0 +1,346 @@
 +/*
 + * I2C slave frame queue backend
 + *
@@ -123,7 +122,8 @@ index 0000000..73ed36c
 +static int frameq_open(struct inode *inode, struct file *file)
 +{
 +	struct miscdevice *miscdev = file->private_data;
-+	struct frameq_data *fq = container_of(miscdev, struct frameq_data, miscdev);
++	struct frameq_data *fq = container_of(miscdev, struct frameq_data,
++					      miscdev);
 +	unsigned long flags;
 +	int ret = 0;
 +
@@ -138,6 +138,7 @@ index 0000000..73ed36c
 +		return ret;
 +
 +	file->private_data = fq;
++
 +	return nonseekable_open(inode, file);
 +}
 +
@@ -302,12 +303,14 @@ index 0000000..73ed36c
 +	if (!fq->read_buf)
 +		return -ENOMEM;
 +
-+	fq->slots = devm_kcalloc(dev, queue_depth, sizeof(*fq->slots), GFP_KERNEL);
++	fq->slots = devm_kcalloc(dev, queue_depth, sizeof(*fq->slots),
++				 GFP_KERNEL);
 +	if (!fq->slots)
 +		return -ENOMEM;
 +
 +	for (i = 0; i < queue_depth; i++) {
-+		fq->slots[i].data = devm_kmalloc(dev, max_frame_bytes, GFP_KERNEL);
++		fq->slots[i].data = devm_kmalloc(dev, max_frame_bytes,
++						 GFP_KERNEL);
 +		if (!fq->slots[i].data)
 +			return -ENOMEM;
 +	}
@@ -330,6 +333,74 @@ index 0000000..73ed36c
 +
 +	fq = devm_kzalloc(&client->dev, sizeof(*fq), GFP_KERNEL);
 +	if (!fq)
++		return -ENOMEM;
++
++	fq->client = client;
++	spin_lock_init(&fq->lock);
++	init_waitqueue_head(&fq->read_wq);
++	i2c_set_clientdata(client, fq);
++
++	ret = frameq_alloc_buffers(&client->dev, fq);
++	if (ret)
++		return ret;
++
++	name = devm_kzalloc(&client->dev, FRAMEQ_NAME_LEN, GFP_KERNEL);
++	if (!name)
++		return -ENOMEM;
++
++	snprintf(name, FRAMEQ_NAME_LEN, "i2c-slave-frameq-%d-%02x",
++		 client->adapter->nr, client->addr);
++
++	fq->miscdev.minor = MISC_DYNAMIC_MINOR;
++	fq->miscdev.name = name;
++	fq->miscdev.fops = &frameq_fops;
++
++	ret = misc_register(&fq->miscdev);
++	if (ret)
++		return ret;
++
++	ret = i2c_slave_register(client, frameq_slave_cb);
++	if (ret) {
++		misc_deregister(&fq->miscdev);
++		return ret;
++	}
++
++	dev_info(&client->dev,
++		 "registered %s, max_frame_bytes=%u queue_depth=%u\n",
++		 name, max_frame_bytes, queue_depth);
++
++	return 0;
++}
++
++static int frameq_remove(struct i2c_client *client)
++{
++	struct frameq_data *fq = i2c_get_clientdata(client);
++
++	i2c_slave_unregister(client);
++	misc_deregister(&fq->miscdev);
++
++	return 0;
++}
++
++static const struct i2c_device_id frameq_id[] = {
++	{ "slave-frameq", 0 },
++	{ }
++};
++MODULE_DEVICE_TABLE(i2c, frameq_id);
++
++static struct i2c_driver frameq_driver = {
++	.driver = {
++		.name = "i2c-slave-frameq",
++	},
++	.probe = frameq_probe,
++	.remove = frameq_remove,
++	.id_table = frameq_id,
++};
++module_i2c_driver(frameq_driver);
++
++MODULE_AUTHOR("Radsat Developers");
++MODULE_DESCRIPTION("I2C slave write-transaction frame queue backend");
++MODULE_LICENSE("GPL v2");
 -- 
 2.43.0
 
