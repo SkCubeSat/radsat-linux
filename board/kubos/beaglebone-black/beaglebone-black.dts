@@ -108,6 +108,15 @@
 	status = "okay";
 };
 
+&i2c2 {
+	status = "okay";
+	
+	rv3028: rtc@52 {
+		compatible = "microcrystal,rv3028";
+		reg = <0x52>;
+	};
+};
+
 &uart1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart1_pins>;
