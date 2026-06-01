@@ -1,0 +1,335 @@
+From 0f66880c994e565e41c4ecbd8140daec1377c0bc Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Sun, 31 May 2026 19:57:19 -0600
+Subject: [PATCH] i2c: add slave frame queue backend
+
+Add a small I2C slave backend for message-oriented protocols. Each STOP-delimited master-write transaction is queued as one frame and returned to userspace through a misc character device.
+
+The backend is intentionally not CSP-aware; it preserves transaction boundaries and raw bytes for userspace/libcsp.
+---
+ drivers/i2c/Kconfig            |  13 ++
+ drivers/i2c/Makefile           |   1 +
+ drivers/i2c/i2c-slave-frameq.c | 275 +++++++++++++++++++++++++++++++++
+ 3 files changed, 289 insertions(+)
+ create mode 100644 drivers/i2c/i2c-slave-frameq.c
+
+diff --git a/drivers/i2c/Kconfig b/drivers/i2c/Kconfig
+index 78fbee4..795a102 100644
+--- a/drivers/i2c/Kconfig
++++ b/drivers/i2c/Kconfig
+@@ -118,6 +118,19 @@ if I2C_SLAVE
+ config I2C_SLAVE_EEPROM
+ 	tristate "I2C eeprom slave driver"
+ 
++config I2C_SLAVE_FRAMEQ
++	tristate "I2C slave frame queue backend"
++	help
++	  This backend exposes complete I2C master-write transactions to
++	  userspace through a misc character device. Each successful read from
++	  the device returns exactly one STOP-delimited write transaction.
++
++	  This is useful for message-oriented protocols carried over I2C slave
++	  writes, such as CSP-over-I2C frames returned by a transceiver which
++	  becomes bus master when it has a response.
++
++	  If unsure, say N.
++
+ endif
+ 
+ config I2C_DEBUG_CORE
+diff --git a/drivers/i2c/Makefile b/drivers/i2c/Makefile
+index 45095b3..67cca00 100644
+--- a/drivers/i2c/Makefile
++++ b/drivers/i2c/Makefile
+@@ -10,6 +10,7 @@ obj-$(CONFIG_I2C_MUX)		+= i2c-mux.o
+ obj-y				+= algos/ busses/ muxes/
+ obj-$(CONFIG_I2C_STUB)		+= i2c-stub.o
+ obj-$(CONFIG_I2C_SLAVE_EEPROM)	+= i2c-slave-eeprom.o
++obj-$(CONFIG_I2C_SLAVE_FRAMEQ)	+= i2c-slave-frameq.o
+ 
+ ccflags-$(CONFIG_I2C_DEBUG_CORE) := -DDEBUG
+ CFLAGS_i2c-core.o := -Wno-deprecated-declarations
+diff --git a/drivers/i2c/i2c-slave-frameq.c b/drivers/i2c/i2c-slave-frameq.c
+new file mode 100644
+index 0000000..73ed36c
+--- /dev/null
++++ b/drivers/i2c/i2c-slave-frameq.c
+@@ -0,0 +1,275 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * I2C slave frame queue backend
++ *
++ * This backend preserves I2C transaction boundaries for userspace. One
++ * STOP-delimited master-write transaction becomes one frame returned by read().
++ */
++
++#include <linux/errno.h>
++#include <linux/fs.h>
++#include <linux/i2c.h>
++#include <linux/init.h>
++#include <linux/miscdevice.h>
++#include <linux/module.h>
++#include <linux/poll.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include <linux/uaccess.h>
++#include <linux/wait.h>
++
++#define FRAMEQ_DEFAULT_MAX_FRAME_BYTES	260
++#define FRAMEQ_DEFAULT_QUEUE_DEPTH	32
++#define FRAMEQ_NAME_LEN			32
++#define FRAMEQ_READ_FILL_BYTE		0xff
++
++static unsigned int max_frame_bytes = FRAMEQ_DEFAULT_MAX_FRAME_BYTES;
++module_param(max_frame_bytes, uint, 0444);
++MODULE_PARM_DESC(max_frame_bytes, "Maximum bytes accepted in one I2C write transaction");
++
++static unsigned int queue_depth = FRAMEQ_DEFAULT_QUEUE_DEPTH;
++module_param(queue_depth, uint, 0444);
++MODULE_PARM_DESC(queue_depth, "Number of complete frames queued for userspace");
++
++struct frameq_slot {
++	size_t len;
++	u8 *data;
++};
++
++struct frameq_data {
++	struct i2c_client *client;
++	struct miscdevice miscdev;
++
++	spinlock_t lock;
++	wait_queue_head_t read_wq;
++
++	struct frameq_slot *slots;
++	unsigned int head;
++	unsigned int tail;
++	unsigned int count;
++
++	u8 *active;
++	size_t active_len;
++	bool active_overflow;
++
++	u8 *read_buf;
++	bool reader_open;
++
++	u64 rx_frames;
++	u64 rx_bytes;
++	u64 rx_overflow_drops;
++	u64 queue_full_drops;
++	u64 empty_stop_drops;
++	u64 unexpected_reads;
++};
++
++static int frameq_open(struct inode *inode, struct file *file)
++{
++	struct miscdevice *miscdev = file->private_data;
++	struct frameq_data *fq = container_of(miscdev, struct frameq_data, miscdev);
++	unsigned long flags;
++	int ret = 0;
++
++	spin_lock_irqsave(&fq->lock, flags);
++	if (fq->reader_open)
++		ret = -EBUSY;
++	else
++		fq->reader_open = true;
++	spin_unlock_irqrestore(&fq->lock, flags);
++
++	if (ret)
++		return ret;
++
++	file->private_data = fq;
++	return nonseekable_open(inode, file);
++}
++
++static int frameq_release(struct inode *inode, struct file *file)
++{
++	struct frameq_data *fq = file->private_data;
++	unsigned long flags;
++
++	spin_lock_irqsave(&fq->lock, flags);
++	fq->reader_open = false;
++	spin_unlock_irqrestore(&fq->lock, flags);
++
++	return 0;
++}
++
++static ssize_t frameq_read(struct file *file, char __user *buf,
++			   size_t count, loff_t *ppos)
++{
++	struct frameq_data *fq = file->private_data;
++	unsigned long flags;
++	size_t len;
++	int ret;
++
++	for (;;) {
++		spin_lock_irqsave(&fq->lock, flags);
++		if (fq->count) {
++			len = fq->slots[fq->tail].len;
++			if (count < len) {
++				spin_unlock_irqrestore(&fq->lock, flags);
++				return -EMSGSIZE;
++			}
++
++			memcpy(fq->read_buf, fq->slots[fq->tail].data, len);
++			fq->tail = (fq->tail + 1) % queue_depth;
++			fq->count--;
++			spin_unlock_irqrestore(&fq->lock, flags);
++
++			if (copy_to_user(buf, fq->read_buf, len))
++				return -EFAULT;
++
++			return len;
++		}
++		spin_unlock_irqrestore(&fq->lock, flags);
++
++		if (file->f_flags & O_NONBLOCK)
++			return -EAGAIN;
++
++		ret = wait_event_interruptible(fq->read_wq, fq->count > 0);
++		if (ret)
++			return ret;
++	}
++}
++
++static unsigned int frameq_poll(struct file *file, poll_table *wait)
++{
++	struct frameq_data *fq = file->private_data;
++	unsigned int mask = 0;
++
++	poll_wait(file, &fq->read_wq, wait);
++	if (fq->count > 0)
++		mask |= POLLIN | POLLRDNORM;
++
++	return mask;
++}
++
++static const struct file_operations frameq_fops = {
++	.owner = THIS_MODULE,
++	.open = frameq_open,
++	.release = frameq_release,
++	.read = frameq_read,
++	.poll = frameq_poll,
++	.llseek = no_llseek,
++};
++
++static bool frameq_finish_write(struct frameq_data *fq)
++{
++	bool queued = false;
++
++	if (!fq->active_len) {
++		fq->empty_stop_drops++;
++		goto reset;
++	}
++
++	if (fq->active_overflow) {
++		fq->rx_overflow_drops++;
++		goto reset;
++	}
++
++	if (fq->count >= queue_depth) {
++		fq->queue_full_drops++;
++		goto reset;
++	}
++
++	memcpy(fq->slots[fq->head].data, fq->active, fq->active_len);
++	fq->slots[fq->head].len = fq->active_len;
++	fq->head = (fq->head + 1) % queue_depth;
++	fq->count++;
++	fq->rx_frames++;
++	queued = true;
++
++reset:
++	fq->active_len = 0;
++	fq->active_overflow = false;
++
++	return queued;
++}
++
++static int frameq_slave_cb(struct i2c_client *client,
++			   enum i2c_slave_event event, u8 *val)
++{
++	struct frameq_data *fq = i2c_get_clientdata(client);
++	unsigned long flags;
++	bool wake_reader;
++
++	switch (event) {
++	case I2C_SLAVE_WRITE_REQUESTED:
++		spin_lock_irqsave(&fq->lock, flags);
++		fq->active_len = 0;
++		fq->active_overflow = false;
++		spin_unlock_irqrestore(&fq->lock, flags);
++		break;
++
++	case I2C_SLAVE_WRITE_RECEIVED:
++		spin_lock_irqsave(&fq->lock, flags);
++		fq->rx_bytes++;
++		if (fq->active_len < max_frame_bytes)
++			fq->active[fq->active_len++] = *val;
++		else
++			fq->active_overflow = true;
++		spin_unlock_irqrestore(&fq->lock, flags);
++		break;
++
++	case I2C_SLAVE_STOP:
++		spin_lock_irqsave(&fq->lock, flags);
++		wake_reader = frameq_finish_write(fq);
++		spin_unlock_irqrestore(&fq->lock, flags);
++		if (wake_reader)
++			wake_up_interruptible(&fq->read_wq);
++		break;
++
++	case I2C_SLAVE_READ_REQUESTED:
++	case I2C_SLAVE_READ_PROCESSED:
++		spin_lock_irqsave(&fq->lock, flags);
++		fq->unexpected_reads++;
++		spin_unlock_irqrestore(&fq->lock, flags);
++		*val = FRAMEQ_READ_FILL_BYTE;
++		break;
++	}
++
++	return 0;
++}
++
++static int frameq_alloc_buffers(struct device *dev, struct frameq_data *fq)
++{
++	unsigned int i;
++
++	fq->active = devm_kmalloc(dev, max_frame_bytes, GFP_KERNEL);
++	if (!fq->active)
++		return -ENOMEM;
++
++	fq->read_buf = devm_kmalloc(dev, max_frame_bytes, GFP_KERNEL);
++	if (!fq->read_buf)
++		return -ENOMEM;
++
++	fq->slots = devm_kcalloc(dev, queue_depth, sizeof(*fq->slots), GFP_KERNEL);
++	if (!fq->slots)
++		return -ENOMEM;
++
++	for (i = 0; i < queue_depth; i++) {
++		fq->slots[i].data = devm_kmalloc(dev, max_frame_bytes, GFP_KERNEL);
++		if (!fq->slots[i].data)
++			return -ENOMEM;
++	}
++
++	return 0;
++}
++
++static int frameq_probe(struct i2c_client *client,
++			const struct i2c_device_id *id)
++{
++	struct frameq_data *fq;
++	char *name;
++	int ret;
++
++	if (!max_frame_bytes || !queue_depth)
++		return -EINVAL;
++
++	if (!i2c_check_functionality(client->adapter, I2C_FUNC_SLAVE))
++		return -EOPNOTSUPP;
++
++	fq = devm_kzalloc(&client->dev, sizeof(*fq), GFP_KERNEL);
++	if (!fq)
+-- 
+2.43.0
+
