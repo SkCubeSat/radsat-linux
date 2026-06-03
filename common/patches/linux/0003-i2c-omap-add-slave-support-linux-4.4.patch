@@ -7,7 +7,7 @@ Add Linux I2C slave/target registration to the OMAP adapter used by the KubOS 4.
 
 The NXTRX4 CSP-over-I2C response path requires the OBC to accept master-write transactions from the radio, so the adapter must expose I2C_FUNC_SLAVE and dispatch slave events to a backend.
 
-Linux 4.4 normally rejects reserved low addresses during slave registration. Use the permissive runtime address check for slave clients so the NXTRX4 default route address 0x01 can be registered.
+Linux 4.4 normally rejects reserved low addresses during slave registration. Use the permissive runtime address check for slave clients so the NXTRX4 default route address 0x07 can be registered.
 ---
  drivers/i2c/busses/i2c-omap.c | 248 +++++++++++++++++++++++++++++++++-
  drivers/i2c/i2c-core.c        |   9 +-
