@@ -1,6 +1,6 @@
-From de43cc5f7d23aacb1c1e36a3f2b214bed167790b Mon Sep 17 00:00:00 2001
+From 73cee431e63049f7d79a8287105fb31e76031961 Mon Sep 17 00:00:00 2001
 From: Radsat Developers <dev@radsat.local>
-Date: Wed, 3 Jun 2026 17:42:09 -0600
+Date: Sun, 31 May 2026 20:17:08 -0600
 Subject: [PATCH] i2c: omap: add slave support for linux 4.4
 
 Add Linux I2C slave/target registration to the OMAP adapter used by the KubOS 4.4 OBC kernel.
@@ -8,15 +8,13 @@ Add Linux I2C slave/target registration to the OMAP adapter used by the KubOS 4.
 The NXTRX4 CSP-over-I2C response path requires the OBC to accept master-write transactions from the radio, so the adapter must expose I2C_FUNC_SLAVE and dispatch slave events to a backend.
 
 Linux 4.4 normally rejects reserved low addresses during slave registration. Use the permissive runtime address check for slave clients so the NXTRX4 configured route address 0x07 can be registered.
-
-Restore the controller to own-address/listen mode once master transfers complete and immediately after slave registration, otherwise a radio response shortly after an OBC master write can see the controller still in master mode and get an address NAK.
 ---
- drivers/i2c/busses/i2c-omap.c | 273 +++++++++++++++++++++++++++++++++-
+ drivers/i2c/busses/i2c-omap.c | 248 +++++++++++++++++++++++++++++++++-
  drivers/i2c/i2c-core.c        |   9 +-
- 2 files changed, 274 insertions(+), 8 deletions(-)
+ 2 files changed, 249 insertions(+), 8 deletions(-)
 
 diff --git a/drivers/i2c/busses/i2c-omap.c b/drivers/i2c/busses/i2c-omap.c
-index 08d26ba..d9cac8f 100644
+index 08d26ba..2afc571 100644
 --- a/drivers/i2c/busses/i2c-omap.c
 +++ b/drivers/i2c/busses/i2c-omap.c
 @@ -1,5 +1,5 @@
@@ -28,383 +26,344 @@ index 08d26ba..d9cac8f 100644
   * Copyright (C) 2005 Nokia Corporation
 @@ -89,6 +89,8 @@ enum {
  /* I2C Interrupt Enable Register (OMAP_I2C_IE): */
- #define OMAP_I2C_IE_XDR                (1 << 14)       /* TX Buffer drain int enable */
- #define OMAP_I2C_IE_RDR                (1 << 13)       /* RX Buffer drain int enable */
-+#define OMAP_I2C_IE_AAS                (1 << 9)        /* Addressed as slave int enable */
-+#define OMAP_I2C_IE_BF         (1 << 8)        /* Bus free int enable */
- #define OMAP_I2C_IE_XRDY       (1 << 4)        /* TX data ready int enable */
- #define OMAP_I2C_IE_RRDY       (1 << 3)        /* RX data ready int enable */
- #define OMAP_I2C_IE_ARDY       (1 << 2)        /* Access ready int enable */
+ #define OMAP_I2C_IE_XDR		(1 << 14)	/* TX Buffer drain int enable */
+ #define OMAP_I2C_IE_RDR		(1 << 13)	/* RX Buffer drain int enable */
++#define OMAP_I2C_IE_AAS		(1 << 9)	/* Addressed as slave int enable */
++#define OMAP_I2C_IE_BF		(1 << 8)	/* Bus free int enable */
+ #define OMAP_I2C_IE_XRDY	(1 << 4)	/* TX data ready int enable */
+ #define OMAP_I2C_IE_RRDY	(1 << 3)	/* RX data ready int enable */
+ #define OMAP_I2C_IE_ARDY	(1 << 2)	/* Access ready int enable */
 @@ -141,6 +143,7 @@ enum {
- #define OMAP_I2C_CON_MST       (1 << 10)       /* Master/slave mode */
- #define OMAP_I2C_CON_TRX       (1 << 9)        /* TX/RX mode (master only) */
- #define OMAP_I2C_CON_XA                (1 << 8)        /* Expand address */
-+#define OMAP_I2C_CON_XOA       (1 << 7)        /* Expand own address */
- #define OMAP_I2C_CON_RM                (1 << 2)        /* Repeat mode (master only) */
- #define OMAP_I2C_CON_STP       (1 << 1)        /* Stop cond (master only) */
- #define OMAP_I2C_CON_STT       (1 << 0)        /* Start condition (master) */
+ #define OMAP_I2C_CON_MST	(1 << 10)	/* Master/slave mode */
+ #define OMAP_I2C_CON_TRX	(1 << 9)	/* TX/RX mode (master only) */
+ #define OMAP_I2C_CON_XA		(1 << 8)	/* Expand address */
++#define OMAP_I2C_CON_XOA	(1 << 7)	/* Expand own address */
+ #define OMAP_I2C_CON_RM		(1 << 2)	/* Repeat mode (master only) */
+ #define OMAP_I2C_CON_STP	(1 << 1)	/* Stop cond (master only) */
+ #define OMAP_I2C_CON_STT	(1 << 0)	/* Start condition (master) */
 @@ -184,6 +187,10 @@ enum {
-
- #define OMAP_I2C_IP_V2_INTERRUPTS_MASK 0x6FFF
-
+ 
+ #define OMAP_I2C_IP_V2_INTERRUPTS_MASK	0x6FFF
+ 
 +/* Slave ISR doesn't support rev1 IP. */
-+#define OMAP_I2C_SLAVE_ENABLED         (IS_ENABLED(CONFIG_I2C_SLAVE) && \
-+                                       !IS_ENABLED(CONFIG_ARCH_OMAP15XX))
++#define OMAP_I2C_SLAVE_ENABLED		(IS_ENABLED(CONFIG_I2C_SLAVE) && \
++					!IS_ENABLED(CONFIG_ARCH_OMAP15XX))
 +
  struct omap_i2c_dev {
-        spinlock_t              lock;           /* IRQ synchronization */
-        struct device           *dev;
+ 	spinlock_t		lock;		/* IRQ synchronization */
+ 	struct device		*dev;
 @@ -221,6 +228,11 @@ struct omap_i2c_dev {
-        u16                     syscstate;
-        u16                     westate;
-        u16                     errata;
+ 	u16			syscstate;
+ 	u16			westate;
+ 	u16			errata;
 +#if OMAP_I2C_SLAVE_ENABLED
-+       struct i2c_client       *slave;
-+       unsigned                aas:1;          /* addressed as slave */
-+       unsigned                idle:1;         /* first byte of slave transfer */
++	struct i2c_client	*slave;
++	unsigned		aas:1;		/* addressed as slave */
++	unsigned		idle:1;		/* first byte of slave transfer */
 +#endif
  };
-
+ 
  static const u8 reg_map_ip_v1[] = {
-@@ -283,6 +295,26 @@ static inline u16 omap_i2c_read_reg(struct omap_i2c_dev *omap, int reg)
-                                (omap->regs[reg] << omap->reg_shift));
- }
-
-+#if OMAP_I2C_SLAVE_ENABLED
-+static void omap_i2c_restore_slave_mode(struct omap_i2c_dev *omap)
-+{
-+       struct i2c_client *slave = omap->slave;
-+       u16 con = OMAP_I2C_CON_EN;
-+
-+       if (!slave)
-+               return;
-+
-+       if (omap->speed > 400)
-+               con |= OMAP_I2C_CON_OPMODE_HS;
-+       if (slave->flags & I2C_CLIENT_TEN)
-+               con |= OMAP_I2C_CON_XOA;
-+
-+       omap_i2c_write_reg(omap, OMAP_I2C_OA_REG, slave->addr);
-+       omap_i2c_write_reg(omap, OMAP_I2C_CON_REG, con);
-+       omap_i2c_write_reg(omap, OMAP_I2C_IE_REG, omap->iestate);
-+}
-+#endif
-+
- static void __omap_i2c_init(struct omap_i2c_dev *omap)
- {
-
-@@ -487,6 +519,10 @@ static int omap_i2c_wait_for_bb(struct omap_i2c_dev *omap)
-                msleep(1);
-        }
-
-+#if OMAP_I2C_SLAVE_ENABLED
-+       omap_i2c_restore_slave_mode(omap);
-+#endif
-+
-        return 0;
- }
-
-@@ -785,8 +821,15 @@ out:
+@@ -785,8 +797,15 @@ out:
  static u32
  omap_i2c_func(struct i2c_adapter *adap)
  {
--       return I2C_FUNC_I2C | (I2C_FUNC_SMBUS_EMUL & ~I2C_FUNC_SMBUS_QUICK) |
--              I2C_FUNC_PROTOCOL_MANGLING;
-+       u32 func = I2C_FUNC_I2C |
-+                  (I2C_FUNC_SMBUS_EMUL & ~I2C_FUNC_SMBUS_QUICK) |
-+                  I2C_FUNC_PROTOCOL_MANGLING;
+-	return I2C_FUNC_I2C | (I2C_FUNC_SMBUS_EMUL & ~I2C_FUNC_SMBUS_QUICK) |
+-	       I2C_FUNC_PROTOCOL_MANGLING;
++	u32 func = I2C_FUNC_I2C |
++		   (I2C_FUNC_SMBUS_EMUL & ~I2C_FUNC_SMBUS_QUICK) |
++		   I2C_FUNC_PROTOCOL_MANGLING;
 +
 +#if OMAP_I2C_SLAVE_ENABLED
-+       func |= I2C_FUNC_SLAVE;
++	func |= I2C_FUNC_SLAVE;
 +#endif
 +
-+       return func;
++	return func;
  }
-
+ 
  static inline void
-@@ -987,6 +1030,202 @@ static int omap_i2c_transmit_data(struct omap_i2c_dev *omap, u8 num_bytes,
-        return 0;
+@@ -987,6 +1006,201 @@ static int omap_i2c_transmit_data(struct omap_i2c_dev *omap, u8 num_bytes,
+ 	return 0;
  }
-
+ 
 +#if OMAP_I2C_SLAVE_ENABLED
 +static void omap_i2c_slave_write_received(struct omap_i2c_dev *omap,
-+                                         u8 num_bytes)
++					  u8 num_bytes)
 +{
-+       u8 value = 0;
++	u8 value = 0;
 +
-+       while (num_bytes--) {
-+               if (omap->idle) {
-+                       omap->idle = 0;
-+                       i2c_slave_event(omap->slave, I2C_SLAVE_WRITE_REQUESTED,
-+                                       &value);
-+               }
++	while (num_bytes--) {
++		if (omap->idle) {
++			omap->idle = 0;
++			i2c_slave_event(omap->slave, I2C_SLAVE_WRITE_REQUESTED,
++					&value);
++		}
 +
-+               value = omap_i2c_read_reg(omap, OMAP_I2C_DATA_REG);
-+               i2c_slave_event(omap->slave, I2C_SLAVE_WRITE_RECEIVED,
-+                               &value);
-+       }
++		value = omap_i2c_read_reg(omap, OMAP_I2C_DATA_REG);
++		i2c_slave_event(omap->slave, I2C_SLAVE_WRITE_RECEIVED,
++				&value);
++	}
 +}
 +
 +static void omap_i2c_slave_read_processed(struct omap_i2c_dev *omap)
 +{
-+       u8 value = 0xff;
++	u8 value = 0xff;
 +
-+       if (omap->idle) {
-+               omap->idle = 0;
-+               i2c_slave_event(omap->slave, I2C_SLAVE_READ_REQUESTED,
-+                               &value);
-+       } else {
-+               i2c_slave_event(omap->slave, I2C_SLAVE_READ_PROCESSED,
-+                               &value);
-+       }
++	if (omap->idle) {
++		omap->idle = 0;
++		i2c_slave_event(omap->slave, I2C_SLAVE_READ_REQUESTED,
++				&value);
++	} else {
++		i2c_slave_event(omap->slave, I2C_SLAVE_READ_PROCESSED,
++				&value);
++	}
 +
-+       omap_i2c_write_reg(omap, OMAP_I2C_DATA_REG, value);
++	omap_i2c_write_reg(omap, OMAP_I2C_DATA_REG, value);
 +}
 +
 +static void omap_i2c_slave_event(struct omap_i2c_dev *omap)
 +{
-+       u16 bits;
-+       u16 stat;
-+       u8 value = 0;
-+       int count = 0;
++	u16 bits;
++	u16 stat;
++	u8 value = 0;
++	int count = 0;
 +
-+       do {
-+               bits = omap_i2c_read_reg(omap, OMAP_I2C_IE_REG);
-+               stat = omap_i2c_read_reg(omap, OMAP_I2C_STAT_REG);
-+               stat &= bits;
++	do {
++		bits = omap_i2c_read_reg(omap, OMAP_I2C_IE_REG);
++		stat = omap_i2c_read_reg(omap, OMAP_I2C_STAT_REG);
++		stat &= bits;
 +
-+               if (!stat)
-+                       break;
++		if (!stat)
++			break;
 +
-+               dev_dbg(omap->dev, "Slave IRQ (ISR = 0x%04x)\n", stat);
-+               if (count++ == 100) {
-+                       dev_warn(omap->dev, "Too much slave work in one IRQ\n");
-+                       break;
-+               }
++		dev_dbg(omap->dev, "Slave IRQ (ISR = 0x%04x)\n", stat);
++		if (count++ == 100) {
++			dev_warn(omap->dev, "Too much slave work in one IRQ\n");
++			break;
++		}
 +
-+               if (stat & OMAP_I2C_STAT_AAS) {
-+                       omap->idle = 1;
-+                       omap_i2c_ack_stat(omap, OMAP_I2C_STAT_AAS);
-+               }
++		if (stat & OMAP_I2C_STAT_AAS) {
++			omap->idle = 1;
++			omap_i2c_ack_stat(omap, OMAP_I2C_STAT_AAS);
++		}
 +
-+               if (stat & (OMAP_I2C_STAT_ARDY | OMAP_I2C_STAT_NACK))
-+                       omap_i2c_ack_stat(omap, OMAP_I2C_STAT_ARDY |
-+                                               OMAP_I2C_STAT_NACK);
++		if (stat & (OMAP_I2C_STAT_ARDY | OMAP_I2C_STAT_NACK))
++			omap_i2c_ack_stat(omap, OMAP_I2C_STAT_ARDY |
++						OMAP_I2C_STAT_NACK);
 +
-+               if (stat & OMAP_I2C_STAT_RDR) {
-+                       u8 num_bytes = 1;
++		if (stat & OMAP_I2C_STAT_RDR) {
++			u8 num_bytes = 1;
 +
-+                       if (omap->fifo_size)
-+                               num_bytes = (omap_i2c_read_reg(omap,
-+                                       OMAP_I2C_BUFSTAT_REG) >> 8) & 0x3f;
-+                       if (!num_bytes)
-+                               num_bytes = 1;
++			if (omap->fifo_size)
++				num_bytes = (omap_i2c_read_reg(omap,
++					OMAP_I2C_BUFSTAT_REG) >> 8) & 0x3f;
++			if (!num_bytes)
++				num_bytes = 1;
 +
-+                       omap_i2c_slave_write_received(omap, num_bytes);
-+                       omap_i2c_ack_stat(omap, OMAP_I2C_STAT_RDR);
-+                       continue;
-+               }
++			omap_i2c_slave_write_received(omap, num_bytes);
++			omap_i2c_ack_stat(omap, OMAP_I2C_STAT_RDR);
++			continue;
++		}
 +
-+               if (stat & OMAP_I2C_STAT_RRDY) {
-+                       omap_i2c_slave_write_received(omap, 1);
-+                       omap_i2c_ack_stat(omap, OMAP_I2C_STAT_RRDY);
-+                       continue;
-+               }
++		if (stat & OMAP_I2C_STAT_RRDY) {
++			omap_i2c_slave_write_received(omap, 1);
++			omap_i2c_ack_stat(omap, OMAP_I2C_STAT_RRDY);
++			continue;
++		}
 +
-+               if (stat & (OMAP_I2C_STAT_XDR | OMAP_I2C_STAT_XRDY)) {
-+                       omap_i2c_slave_read_processed(omap);
-+                       omap_i2c_ack_stat(omap, OMAP_I2C_STAT_XDR |
-+                                               OMAP_I2C_STAT_XRDY);
-+                       continue;
-+               }
++		if (stat & (OMAP_I2C_STAT_XDR | OMAP_I2C_STAT_XRDY)) {
++			omap_i2c_slave_read_processed(omap);
++			omap_i2c_ack_stat(omap, OMAP_I2C_STAT_XDR |
++						OMAP_I2C_STAT_XRDY);
++			continue;
++		}
 +
-+               if (stat & OMAP_I2C_STAT_BF) {
-+                       omap->aas = 0;
-+                       i2c_slave_event(omap->slave, I2C_SLAVE_STOP, &value);
-+                       omap_i2c_ack_stat(omap, OMAP_I2C_STAT_BF);
-+                       continue;
-+               }
++		if (stat & OMAP_I2C_STAT_BF) {
++			omap->aas = 0;
++			i2c_slave_event(omap->slave, I2C_SLAVE_STOP, &value);
++			omap_i2c_ack_stat(omap, OMAP_I2C_STAT_BF);
++			continue;
++		}
 +
-+               if (stat & OMAP_I2C_STAT_ROVR) {
-+                       dev_warn(omap->dev, "Slave receive overrun\n");
-+                       omap_i2c_ack_stat(omap, OMAP_I2C_STAT_ROVR);
-+                       continue;
-+               }
++		if (stat & OMAP_I2C_STAT_ROVR) {
++			dev_warn(omap->dev, "Slave receive overrun\n");
++			omap_i2c_ack_stat(omap, OMAP_I2C_STAT_ROVR);
++			continue;
++		}
 +
-+               if (stat & OMAP_I2C_STAT_XUDF) {
-+                       dev_warn(omap->dev, "Slave transmit underflow\n");
-+                       omap_i2c_ack_stat(omap, OMAP_I2C_STAT_XUDF);
-+                       continue;
-+               }
-+       } while (stat);
++		if (stat & OMAP_I2C_STAT_XUDF) {
++			dev_warn(omap->dev, "Slave transmit underflow\n");
++			omap_i2c_ack_stat(omap, OMAP_I2C_STAT_XUDF);
++			continue;
++		}
++	} while (stat);
 +}
 +
 +static int omap_i2c_reg_slave(struct i2c_client *slave)
 +{
-+       struct omap_i2c_dev *omap = i2c_get_adapdata(slave->adapter);
-+       unsigned long flags;
-+       u16 con;
-+       int ret;
++	struct omap_i2c_dev *omap = i2c_get_adapdata(slave->adapter);
++	unsigned long flags;
++	u16 con;
++	int ret;
 +
-+       ret = pm_runtime_get_sync(omap->dev);
-+       if (ret < 0) {
-+               pm_runtime_put_noidle(omap->dev);
-+               return ret;
-+       }
++	ret = pm_runtime_get_sync(omap->dev);
++	if (ret < 0) {
++		pm_runtime_put_noidle(omap->dev);
++		return ret;
++	}
 +
-+       spin_lock_irqsave(&omap->lock, flags);
-+       if (omap->slave) {
-+               ret = -EBUSY;
-+               goto err_unlock;
-+       }
++	spin_lock_irqsave(&omap->lock, flags);
++	if (omap->slave) {
++		ret = -EBUSY;
++		goto err_unlock;
++	}
 +
-+       omap->slave = slave;
-+       omap->aas = 0;
-+       omap->idle = 1;
++	omap->slave = slave;
++	omap->aas = 0;
++	omap->idle = 1;
 +
-+       dev_info(omap->dev, "Registering slave at address 0x%02x\n",
-+                slave->addr);
++	dev_info(omap->dev, "Registering slave at address 0x%02x\n",
++		 slave->addr);
 +
-+       if (slave->flags & I2C_CLIENT_TEN) {
-+               con = omap_i2c_read_reg(omap, OMAP_I2C_CON_REG);
-+               omap_i2c_write_reg(omap, OMAP_I2C_CON_REG,
-+                                  con | OMAP_I2C_CON_XOA);
-+       }
++	if (slave->flags & I2C_CLIENT_TEN) {
++		con = omap_i2c_read_reg(omap, OMAP_I2C_CON_REG);
++		omap_i2c_write_reg(omap, OMAP_I2C_CON_REG,
++				   con | OMAP_I2C_CON_XOA);
++	}
 +
-+       omap_i2c_write_reg(omap, OMAP_I2C_OA_REG, slave->addr);
++	omap_i2c_write_reg(omap, OMAP_I2C_OA_REG, slave->addr);
 +
-+       omap->iestate |= OMAP_I2C_IE_AAS | OMAP_I2C_IE_BF;
-+       omap_i2c_write_reg(omap, OMAP_I2C_IE_REG, omap->iestate);
-+       omap_i2c_restore_slave_mode(omap);
++	omap->iestate |= OMAP_I2C_IE_AAS | OMAP_I2C_IE_BF;
++	omap_i2c_write_reg(omap, OMAP_I2C_IE_REG, omap->iestate);
 +
-+       spin_unlock_irqrestore(&omap->lock, flags);
++	spin_unlock_irqrestore(&omap->lock, flags);
 +
-+       return 0;
++	return 0;
 +
 +err_unlock:
-+       spin_unlock_irqrestore(&omap->lock, flags);
-+       pm_runtime_put_noidle(omap->dev);
++	spin_unlock_irqrestore(&omap->lock, flags);
++	pm_runtime_put_noidle(omap->dev);
 +
-+       return ret;
++	return ret;
 +}
 +
 +static int omap_i2c_unreg_slave(struct i2c_client *slave)
 +{
-+       struct omap_i2c_dev *omap = i2c_get_adapdata(slave->adapter);
-+       unsigned long flags;
-+       u16 con;
++	struct omap_i2c_dev *omap = i2c_get_adapdata(slave->adapter);
++	unsigned long flags;
++	u16 con;
 +
-+       spin_lock_irqsave(&omap->lock, flags);
++	spin_lock_irqsave(&omap->lock, flags);
 +
-+       dev_info(omap->dev, "Unregistering slave at address 0x%02x\n",
-+                slave->addr);
++	dev_info(omap->dev, "Unregistering slave at address 0x%02x\n",
++		 slave->addr);
 +
-+       omap->iestate &= ~(OMAP_I2C_IE_AAS | OMAP_I2C_IE_BF);
-+       omap_i2c_write_reg(omap, OMAP_I2C_IE_REG, omap->iestate);
++	omap->iestate &= ~(OMAP_I2C_IE_AAS | OMAP_I2C_IE_BF);
++	omap_i2c_write_reg(omap, OMAP_I2C_IE_REG, omap->iestate);
 +
-+       if (slave->flags & I2C_CLIENT_TEN) {
-+               con = omap_i2c_read_reg(omap, OMAP_I2C_CON_REG);
-+               omap_i2c_write_reg(omap, OMAP_I2C_CON_REG,
-+                                  con & ~OMAP_I2C_CON_XOA);
-+       }
++	if (slave->flags & I2C_CLIENT_TEN) {
++		con = omap_i2c_read_reg(omap, OMAP_I2C_CON_REG);
++		omap_i2c_write_reg(omap, OMAP_I2C_CON_REG,
++				   con & ~OMAP_I2C_CON_XOA);
++	}
 +
-+       omap_i2c_write_reg(omap, OMAP_I2C_OA_REG, 0);
-+       omap->slave = NULL;
-+       omap->aas = 0;
-+       omap->idle = 0;
++	omap_i2c_write_reg(omap, OMAP_I2C_OA_REG, 0);
++	omap->slave = NULL;
++	omap->aas = 0;
++	omap->idle = 0;
 +
-+       spin_unlock_irqrestore(&omap->lock, flags);
++	spin_unlock_irqrestore(&omap->lock, flags);
 +
-+       pm_runtime_mark_last_busy(omap->dev);
-+       pm_runtime_put_autosuspend(omap->dev);
++	pm_runtime_mark_last_busy(omap->dev);
++	pm_runtime_put_autosuspend(omap->dev);
 +
-+       return 0;
++	return 0;
 +}
 +#endif
 +
  static irqreturn_t
  omap_i2c_isr(int irq, void *dev_id)
  {
-@@ -998,8 +1237,19 @@ omap_i2c_isr(int irq, void *dev_id)
-        spin_lock(&omap->lock);
-        mask = omap_i2c_read_reg(omap, OMAP_I2C_IE_REG);
-        stat = omap_i2c_read_reg(omap, OMAP_I2C_STAT_REG);
-+       stat &= mask;
+@@ -998,8 +1212,19 @@ omap_i2c_isr(int irq, void *dev_id)
+ 	spin_lock(&omap->lock);
+ 	mask = omap_i2c_read_reg(omap, OMAP_I2C_IE_REG);
+ 	stat = omap_i2c_read_reg(omap, OMAP_I2C_STAT_REG);
++	stat &= mask;
 +
 +#if OMAP_I2C_SLAVE_ENABLED
-+       if (stat & OMAP_I2C_STAT_AAS) {
-+               /* Clear FIFOs and return thresholds to one byte for slave IO. */
-+               omap_i2c_write_reg(omap, OMAP_I2C_BUF_REG,
-+                                  OMAP_I2C_BUF_RXFIF_CLR |
-+                                  OMAP_I2C_BUF_TXFIF_CLR);
-+               omap->aas = 1;
-+       }
++	if (stat & OMAP_I2C_STAT_AAS) {
++		/* Clear FIFOs and return thresholds to one byte for slave IO. */
++		omap_i2c_write_reg(omap, OMAP_I2C_BUF_REG,
++				   OMAP_I2C_BUF_RXFIF_CLR |
++				   OMAP_I2C_BUF_TXFIF_CLR);
++		omap->aas = 1;
++	}
 +#endif
-
--       if (stat & mask)
-+       if (stat)
-                ret = IRQ_WAKE_THREAD;
-
-        spin_unlock(&omap->lock);
-@@ -1017,6 +1267,12 @@ omap_i2c_isr_thread(int this_irq, void *dev_id)
-        int err = 0, count = 0;
-
-        spin_lock_irqsave(&omap->lock, flags);
+ 
+-	if (stat & mask)
++	if (stat)
+ 		ret = IRQ_WAKE_THREAD;
+ 
+ 	spin_unlock(&omap->lock);
+@@ -1017,6 +1242,12 @@ omap_i2c_isr_thread(int this_irq, void *dev_id)
+ 	int err = 0, count = 0;
+ 
+ 	spin_lock_irqsave(&omap->lock, flags);
 +#if OMAP_I2C_SLAVE_ENABLED
-+       if (omap->aas) {
-+               omap_i2c_slave_event(omap);
-+               goto out;
-+       }
++	if (omap->aas) {
++		omap_i2c_slave_event(omap);
++		goto out;
++	}
 +#endif
-        do {
-                bits = omap_i2c_read_reg(omap, OMAP_I2C_IE_REG);
-                stat = omap_i2c_read_reg(omap, OMAP_I2C_STAT_REG);
-@@ -1057,12 +1313,13 @@ omap_i2c_isr_thread(int this_irq, void *dev_id)
-                        omap_i2c_ack_stat(omap, OMAP_I2C_STAT_ARDY);
-
-                if (stat & (OMAP_I2C_STAT_ARDY | OMAP_I2C_STAT_NACK |
--                                       OMAP_I2C_STAT_AL)) {
-+                                       OMAP_I2C_STAT_AL | OMAP_I2C_STAT_BF)) {
-                        omap_i2c_ack_stat(omap, (OMAP_I2C_STAT_RRDY |
-                                                OMAP_I2C_STAT_RDR |
-                                                OMAP_I2C_STAT_XRDY |
-                                                OMAP_I2C_STAT_XDR |
--                                               OMAP_I2C_STAT_ARDY));
-+                                               OMAP_I2C_STAT_ARDY |
-+                                               OMAP_I2C_STAT_BF));
-                        break;
-                }
-
-@@ -1150,6 +1407,10 @@ out:
+ 	do {
+ 		bits = omap_i2c_read_reg(omap, OMAP_I2C_IE_REG);
+ 		stat = omap_i2c_read_reg(omap, OMAP_I2C_STAT_REG);
+@@ -1057,12 +1288,13 @@ omap_i2c_isr_thread(int this_irq, void *dev_id)
+ 			omap_i2c_ack_stat(omap, OMAP_I2C_STAT_ARDY);
+ 
+ 		if (stat & (OMAP_I2C_STAT_ARDY | OMAP_I2C_STAT_NACK |
+-					OMAP_I2C_STAT_AL)) {
++					OMAP_I2C_STAT_AL | OMAP_I2C_STAT_BF)) {
+ 			omap_i2c_ack_stat(omap, (OMAP_I2C_STAT_RRDY |
+ 						OMAP_I2C_STAT_RDR |
+ 						OMAP_I2C_STAT_XRDY |
+ 						OMAP_I2C_STAT_XDR |
+-						OMAP_I2C_STAT_ARDY));
++						OMAP_I2C_STAT_ARDY |
++						OMAP_I2C_STAT_BF));
+ 			break;
+ 		}
+ 
+@@ -1150,6 +1382,10 @@ out:
  static const struct i2c_algorithm omap_i2c_algo = {
-        .master_xfer    = omap_i2c_xfer,
-        .functionality  = omap_i2c_func,
+ 	.master_xfer	= omap_i2c_xfer,
+ 	.functionality	= omap_i2c_func,
 +#if OMAP_I2C_SLAVE_ENABLED
-+       .reg_slave      = omap_i2c_reg_slave,
-+       .unreg_slave    = omap_i2c_unreg_slave,
++	.reg_slave	= omap_i2c_reg_slave,
++	.unreg_slave	= omap_i2c_unreg_slave,
 +#endif
  };
-
+ 
  #ifdef CONFIG_OF
 diff --git a/drivers/i2c/i2c-core.c b/drivers/i2c/i2c-core.c
 index ba8eb08..521b561 100644
 --- a/drivers/i2c/i2c-core.c
 +++ b/drivers/i2c/i2c-core.c
 @@ -3148,8 +3148,13 @@ int i2c_slave_register(struct i2c_client *client, i2c_slave_cb_t slave_cb)
-                         __func__);
-
-        if (!(client->flags & I2C_CLIENT_TEN)) {
--               /* Enforce stricter address checking */
--               ret = i2c_check_7bit_addr_validity_strict(client->addr);
-+               /*
-+                * Slave backends represent this controller's own address. Some
-+                * attached hardware uses reserved low addresses for that role,
-+                * so use the permissive runtime check instead of probe-time
-+                * strict address validation.
-+                */
-+               ret = i2c_check_addr_validity(client->addr, client->flags);
-                if (ret) {
-                        dev_err(&client->dev, "%s: invalid address\n", __func__);
-                        return ret;
---
+ 			 __func__);
+ 
+ 	if (!(client->flags & I2C_CLIENT_TEN)) {
+-		/* Enforce stricter address checking */
+-		ret = i2c_check_7bit_addr_validity_strict(client->addr);
++		/*
++		 * Slave backends represent this controller's own address. Some
++		 * attached hardware uses reserved low addresses for that role,
++		 * so use the permissive runtime check instead of probe-time
++		 * strict address validation.
++		 */
++		ret = i2c_check_addr_validity(client->addr, client->flags);
+ 		if (ret) {
+ 			dev_err(&client->dev, "%s: invalid address\n", __func__);
+ 			return ret;
+-- 
 2.43.0
