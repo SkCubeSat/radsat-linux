@@ -8,6 +8,8 @@ Add Linux I2C slave/target registration to the OMAP adapter used by the KubOS 4.
 The NXTRX4 CSP-over-I2C response path requires the OBC to accept master-write transactions from the radio, so the adapter must expose I2C_FUNC_SLAVE and dispatch slave events to a backend.
 
 Linux 4.4 normally rejects reserved low addresses during slave registration. Use the permissive runtime address check for slave clients so the NXTRX4 configured route address 0x07 can be registered.
+
+Restore the controller to own-address/listen mode once master transfers complete and immediately after slave registration, otherwise a radio response shortly after an OBC master write can see the controller still in master mode and get an address NAK.
 ---
  drivers/i2c/busses/i2c-omap.c | 248 +++++++++++++++++++++++++++++++++-
  drivers/i2c/i2c-core.c        |   9 +-
@@ -365,5 +367,90 @@ index ba8eb08..521b561 100644
  		if (ret) {
  			dev_err(&client->dev, "%s: invalid address\n", __func__);
  			return ret;
+diff --git a/drivers/i2c/busses/i2c-omap.c b/drivers/i2c/busses/i2c-omap.c
+index 2afc571..608d706 100644
+--- a/drivers/i2c/busses/i2c-omap.c
++++ b/drivers/i2c/busses/i2c-omap.c
+@@ -1007,6 +1007,24 @@ static int omap_i2c_transmit_data(struct omap_i2c_dev *omap, u8 num_bytes,
+ }
+ 
+ #if OMAP_I2C_SLAVE_ENABLED
++static void omap_i2c_restore_slave_mode(struct omap_i2c_dev *omap)
++{
++	struct i2c_client *slave = omap->slave;
++	u16 con = OMAP_I2C_CON_EN;
++
++	if (!slave)
++		return;
++
++	if (omap->speed > 400)
++		con |= OMAP_I2C_CON_OPMODE_HS;
++	if (slave->flags & I2C_CLIENT_TEN)
++		con |= OMAP_I2C_CON_XOA;
++
++	omap_i2c_write_reg(omap, OMAP_I2C_OA_REG, slave->addr);
++	omap_i2c_write_reg(omap, OMAP_I2C_CON_REG, con);
++	omap_i2c_write_reg(omap, OMAP_I2C_IE_REG, omap->iestate);
++}
++
+ static void omap_i2c_slave_write_received(struct omap_i2c_dev *omap,
+ 					  u8 num_bytes)
+ {
+@@ -1155,6 +1173,7 @@ static int omap_i2c_reg_slave(struct i2c_client *slave)
+ 
+ 	omap->iestate |= OMAP_I2C_IE_AAS | OMAP_I2C_IE_BF;
+ 	omap_i2c_write_reg(omap, OMAP_I2C_IE_REG, omap->iestate);
++	omap_i2c_restore_slave_mode(omap);
+ 
+ 	spin_unlock_irqrestore(&omap->lock, flags);
+ 
+@@ -1199,6 +1218,35 @@ static int omap_i2c_unreg_slave(struct i2c_client *slave)
+ 
+ 	return 0;
+ }
++
++static int omap_i2c_xfer_slave(struct i2c_adapter *adap,
++			       struct i2c_msg msgs[], int num)
++{
++	struct omap_i2c_dev *omap = i2c_get_adapdata(adap);
++	unsigned long flags;
++	int ret;
++	int pm_ret;
++
++	ret = omap_i2c_xfer(adap, msgs, num);
++
++	if (!omap->slave)
++		return ret;
++
++	pm_ret = pm_runtime_get_sync(omap->dev);
++	if (pm_ret < 0) {
++		pm_runtime_put_noidle(omap->dev);
++		return ret;
++	}
++
++	spin_lock_irqsave(&omap->lock, flags);
++	omap_i2c_restore_slave_mode(omap);
++	spin_unlock_irqrestore(&omap->lock, flags);
++
++	pm_runtime_mark_last_busy(omap->dev);
++	pm_runtime_put_autosuspend(omap->dev);
++
++	return ret;
++}
+ #endif
+ 
+ static irqreturn_t
+@@ -1380,7 +1428,11 @@ out:
+ }
+ 
+ static const struct i2c_algorithm omap_i2c_algo = {
++#if OMAP_I2C_SLAVE_ENABLED
++	.master_xfer	= omap_i2c_xfer_slave,
++#else
+ 	.master_xfer	= omap_i2c_xfer,
++#endif
+ 	.functionality	= omap_i2c_func,
+ #if OMAP_I2C_SLAVE_ENABLED
+ 	.reg_slave	= omap_i2c_reg_slave,
 -- 
 2.43.0
