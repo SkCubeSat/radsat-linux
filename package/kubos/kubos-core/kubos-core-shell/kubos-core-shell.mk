@@ -11,7 +11,7 @@ KUBOS_CORE_SHELL_POST_INSTALL_TARGET_HOOKS += SHELL_INSTALL_TARGET_CMDS
 KUBOS_CORE_SHELL_POST_INSTALL_TARGET_HOOKS += SHELL_INSTALL_INIT_SYSV
 
 define SHELL_BUILD_CMDS
-	cd $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/services/shell-service && \
+	cd $(KUBOS_SOURCE_DIR)/services/shell-service && \
 	PATH=$(PATH):~/.cargo/bin && \
 	CC=$(TARGET_CC) RUSTFLAGS="-Clinker=$(TARGET_CC)" cargo build --package shell-service --target $(CARGO_TARGET) --release
 endef
@@ -28,8 +28,8 @@ endef
 define SHELL_INSTALL_TARGET_CMDS
 	mkdir -p $(TARGET_DIR)/usr/sbin
 	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/usr/bin && \
-	arm-linux-strip $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/shell-service
-	$(INSTALL) -D -m 0755 $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/shell-service \
+	arm-linux-strip $(KUBOS_CARGO_OUTPUT_DIR)/shell-service
+	$(INSTALL) -D -m 0755 $(KUBOS_CARGO_OUTPUT_DIR)/shell-service \
 		$(TARGET_DIR)/usr/sbin
 		
 	echo 'CHECK PROCESS kubos-shell-service PIDFILE /var/run/shell-service.pid' > $(TARGET_DIR)/etc/monit.d/kubos-shell-service.cfg
@@ -45,7 +45,7 @@ define SHELL_INSTALL_INIT_SYSV
 endef
 
 kubos-core-shell-cargoclean: kubos-core-shell-dirclean
-	cd $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/services/shell-service && \
+	cd $(KUBOS_SOURCE_DIR)/services/shell-service && \
 	PATH=$(PATH):~/.cargo/bin && \
 	cargo clean
 

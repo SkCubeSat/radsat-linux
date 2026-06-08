@@ -11,7 +11,7 @@ KUBOS_MAI400_POST_INSTALL_TARGET_HOOKS += MAI400_INSTALL_TARGET_CMDS
 KUBOS_MAI400_POST_INSTALL_TARGET_HOOKS += MAI400_INSTALL_INIT_SYSV
 
 define MAI400_BUILD_CMDS
-	cd $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/services/mai400-service && \
+	cd $(KUBOS_SOURCE_DIR)/services/mai400-service && \
 	PATH=$(PATH):~/.cargo/bin:/usr/bin/iobc_toolchain/usr/bin && \
 	CC=$(TARGET_CC) RUSTFLAGS="-Clinker=$(TARGET_CC)" cargo build --package mai400-service --target $(CARGO_TARGET) --release
 endef
@@ -27,8 +27,8 @@ endef
 define MAI400_INSTALL_TARGET_CMDS
 	mkdir -p $(TARGET_DIR)/usr/sbin
 	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/usr/bin && \
-	arm-linux-strip $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/mai400-service
-	$(INSTALL) -D -m 0755 $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/mai400-service \
+	arm-linux-strip $(KUBOS_CARGO_OUTPUT_DIR)/mai400-service
+	$(INSTALL) -D -m 0755 $(KUBOS_CARGO_OUTPUT_DIR)/mai400-service \
 		$(TARGET_DIR)/usr/sbin
 		
 	echo 'CHECK PROCESS kubos-mai400 PIDFILE /var/run/mai400-service.pid' > $(TARGET_DIR)/etc/monit.d/kubos-mai400.cfg

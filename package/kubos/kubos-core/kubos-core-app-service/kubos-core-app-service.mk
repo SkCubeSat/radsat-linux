@@ -11,7 +11,7 @@ KUBOS_CORE_APP_SERVICE_POST_INSTALL_TARGET_HOOKS += APP_SERVICE_INSTALL_TARGET_C
 KUBOS_CORE_APP_SERVICE_POST_INSTALL_TARGET_HOOKS += APP_SERVICE_INSTALL_INIT_SYSV
 
 define APP_SERVICE_BUILD_CMDS
-	cd $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/services/app-service && \
+	cd $(KUBOS_SOURCE_DIR)/services/app-service && \
 	PATH=$(PATH):~/.cargo/bin && \
 	PKG_CONFIG_ALLOW_CROSS=1 CC=$(TARGET_CC) RUSTFLAGS="-Clinker=$(TARGET_CC)" cargo build --package kubos-app-service --target $(CARGO_TARGET) --release
 endef
@@ -29,8 +29,8 @@ endef
 define APP_SERVICE_INSTALL_TARGET_CMDS
 	mkdir -p $(TARGET_DIR)/usr/sbin
 	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/usr/bin && \
-	arm-linux-strip $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/kubos-app-service
-	$(INSTALL) -D -m 0755 $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/kubos-app-service \
+	arm-linux-strip $(KUBOS_CARGO_OUTPUT_DIR)/kubos-app-service
+	$(INSTALL) -D -m 0755 $(KUBOS_CARGO_OUTPUT_DIR)/kubos-app-service \
 		$(TARGET_DIR)/usr/sbin
 
 	echo 'CHECK PROCESS kubos-app-service PIDFILE /var/run/kubos-app-service.pid' > $(TARGET_DIR)/etc/monit.d/kubos-app-service.cfg
@@ -46,7 +46,7 @@ define APP_SERVICE_INSTALL_INIT_SYSV
 endef
 
 kubos-core-app-service-cargoclean: kubos-core-app-service-dirclean
-	cd $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/services/app-service && \
+	cd $(KUBOS_SOURCE_DIR)/services/app-service && \
 	PATH=$(PATH):~/.cargo/bin && \
 	cargo clean
 

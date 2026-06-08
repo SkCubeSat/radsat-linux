@@ -11,7 +11,7 @@ KUBOS_CORE_FILE_TRANSFER_POST_INSTALL_TARGET_HOOKS += FILE_TRANSFER_INSTALL_TARG
 KUBOS_CORE_FILE_TRANSFER_POST_INSTALL_TARGET_HOOKS += FILE_TRANSFER_INSTALL_INIT_SYSV
 
 define FILE_TRANSFER_BUILD_CMDS
-	cd $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/services/file-service && \
+	cd $(KUBOS_SOURCE_DIR)/services/file-service && \
 	PATH=$(PATH):~/.cargo/bin && \
 	CC=$(TARGET_CC) RUSTFLAGS="-Clinker=$(TARGET_CC)" cargo build --package file-service --target $(CARGO_TARGET) --release
 endef
@@ -34,8 +34,8 @@ endef
 define FILE_TRANSFER_INSTALL_TARGET_CMDS
 	mkdir -p $(TARGET_DIR)/usr/sbin
 	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/usr/bin && \
-	arm-linux-strip $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/file-service
-	$(INSTALL) -D -m 0755 $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/file-service \
+	arm-linux-strip $(KUBOS_CARGO_OUTPUT_DIR)/file-service
+	$(INSTALL) -D -m 0755 $(KUBOS_CARGO_OUTPUT_DIR)/file-service \
 		$(TARGET_DIR)/usr/sbin
 		
 	echo 'CHECK PROCESS file-service PIDFILE /var/run/file-service.pid' > $(TARGET_DIR)/etc/monit.d/kubos-file-service.cfg
@@ -51,7 +51,7 @@ define FILE_TRANSFER_INSTALL_INIT_SYSV
 endef
 
 kubos-core-file-transfer-cargoclean: kubos-core-file-transfer-dirclean
-	cd $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/services/file-service && \
+	cd $(KUBOS_SOURCE_DIR)/services/file-service && \
 	PATH=$(PATH):~/.cargo/bin && \
 	cargo clean
 

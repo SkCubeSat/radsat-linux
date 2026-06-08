@@ -11,7 +11,7 @@ KUBOS_CORE_SCHEDULER_POST_INSTALL_TARGET_HOOKS += SCHEDULER_INSTALL_TARGET_CMDS
 KUBOS_CORE_SCHEDULER_POST_INSTALL_TARGET_HOOKS += SCHEDULER_INSTALL_INIT_SYSV
 
 define SCHEDULER_BUILD_CMDS
-	cd $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/services/scheduler-service && \
+	cd $(KUBOS_SOURCE_DIR)/services/scheduler-service && \
 	PATH=$(PATH):~/.cargo/bin && \
 	PKG_CONFIG_ALLOW_CROSS=1 CC=$(TARGET_CC) RUSTFLAGS="-Clinker=$(TARGET_CC)" cargo build --package scheduler-service --target $(CARGO_TARGET) --release
 endef
@@ -29,8 +29,8 @@ endef
 define SCHEDULER_INSTALL_TARGET_CMDS
 	mkdir -p $(TARGET_DIR)/usr/sbin
 	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/usr/bin && \
-	arm-linux-strip $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/scheduler-service
-	$(INSTALL) -D -m 0755 $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/scheduler-service \
+	arm-linux-strip $(KUBOS_CARGO_OUTPUT_DIR)/scheduler-service
+	$(INSTALL) -D -m 0755 $(KUBOS_CARGO_OUTPUT_DIR)/scheduler-service \
 		$(TARGET_DIR)/usr/sbin
 
 	echo 'CHECK PROCESS scheduler-service PIDFILE /var/run/scheduler-service.pid' > $(TARGET_DIR)/etc/monit.d/scheduler-service.cfg
@@ -46,7 +46,7 @@ define SCHEDULER_INSTALL_INIT_SYSV
 endef
 
 kubos-core-scheduler-cargoclean: kubos-core-scheduler-service-dirclean
-	cd $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/services/scheduler-service && \
+	cd $(KUBOS_SOURCE_DIR)/services/scheduler-service && \
 	PATH=$(PATH):~/.cargo/bin && \
 	cargo clean
 

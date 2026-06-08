@@ -13,7 +13,7 @@ KUBOS_NSL_DUPLEX_POST_INSTALL_TARGET_HOOKS += NSL_DUPLEX_INSTALL_TARGET_CMDS
 KUBOS_NSL_DUPLEX_POST_INSTALL_TARGET_HOOKS += NSL_DUPLEX_INSTALL_INIT_SYSV
 
 define NSL_DUPLEX_BUILD_CMDS
-	cd $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/services/nsl-duplex-d2-comms-service && \
+	cd $(KUBOS_SOURCE_DIR)/services/nsl-duplex-d2-comms-service && \
 	PATH=$(PATH):~/.cargo/bin:/usr/bin/iobc_toolchain/usr/bin && \
 	PKG_CONFIG_ALLOW_CROSS=1 CC=$(TARGET_CC) RUSTFLAGS="-Clinker=$(TARGET_CC)" cargo build --package nsl-duplex-d2-comms-service --target $(CARGO_TARGET) --release
 endef
@@ -38,8 +38,8 @@ endef
 define NSL_DUPLEX_INSTALL_TARGET_CMDS
 	mkdir -p $(TARGET_DIR)/usr/sbin
 	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/usr/bin && \
-	arm-linux-strip $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/nsl-duplex-d2-comms-service
-	$(INSTALL) -D -m 0755 $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/nsl-duplex-d2-comms-service \
+	arm-linux-strip $(KUBOS_CARGO_OUTPUT_DIR)/nsl-duplex-d2-comms-service
+	$(INSTALL) -D -m 0755 $(KUBOS_CARGO_OUTPUT_DIR)/nsl-duplex-d2-comms-service \
 		$(TARGET_DIR)/usr/sbin
 		
 	echo 'CHECK PROCESS nsl-duplex-d2-comms-service PIDFILE /var/run/nsl-duplex-d2-comms-service.pid' > $(TARGET_DIR)/etc/monit.d/kubos-nsl-duplex.cfg

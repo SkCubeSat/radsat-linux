@@ -9,8 +9,16 @@
 #
 ###############################################
 KUBOS_LICENSE = Apache-2.0
-KUBOS_LICENSE_FILES = LICENSE
-KUBOS_SITE = git://github.com/SkCubeSat/radsat-kubos
+KUBOS_LICENSE_FILES = LICENSE.txt
+KUBOS_SITE = https://github.com/SkCubeSat/Software.git
+KUBOS_SITE_METHOD = git
+KUBOS_GIT_SUBMODULES = YES
+KUBOS_OVERRIDE_SRCDIR_RSYNC_EXCLUSIONS = \
+	--exclude target \
+	--exclude .venv \
+	--exclude docs/node_modules \
+	--exclude docs/.next \
+	--exclude docs/out
 KUBOS_PROVIDES = kubos-mai400
 KUBOS_INSTALL_STAGING = YES
 KUBOS_TARGET_FINALIZE_HOOKS += KUBOS_CREATE_CONFIG
@@ -18,13 +26,12 @@ KUBOS_TARGET_FINALIZE_HOOKS += KUBOS_CREATE_CONFIG
 KUBOS_CONFIG_FRAGMENT_DIR = $(STAGING_DIR)/etc/kubos
 KUBOS_CONFIG_FILE = $(TARGET_DIR)/etc/kubos-config.toml
 
-VERSION = $(call qstrip,$(BR2_KUBOS_VERSION))
-# If the version specified is a branch name, we need to go fetch the SHA1 for the branch's HEAD
-ifeq ($(shell git ls-remote --heads $(KUBOS_SITE) $(VERSION) | wc -l), 1)
-	KUBOS_VERSION := $(shell git ls-remote $(KUBOS_SITE) $(VERSION) | cut -c1-8)
-else
-	KUBOS_VERSION = $(VERSION)
-endif
+KUBOS_VERSION = $(call qstrip,$(BR2_KUBOS_VERSION))
+
+# Cargo metadata lives at the Software repository root, while the Kubos source
+# remains under kubos/. These paths are shared by the legacy child packages.
+KUBOS_SOURCE_DIR = $(KUBOS_DIR)/kubos
+KUBOS_CARGO_OUTPUT_DIR = $(KUBOS_DIR)/target/$(CARGO_TARGET)/release
 
 KUBOS_BR_TARGET = $(lastword $(subst /, ,$(dir $(BR2_LINUX_KERNEL_CUSTOM_DTS_PATH))))
 ifeq ($(KUBOS_BR_TARGET),at91sam9g20isis)
@@ -32,15 +39,14 @@ ifeq ($(KUBOS_BR_TARGET),at91sam9g20isis)
 	CARGO_TARGET = armv5te-unknown-linux-gnueabi
 else ifeq ($(KUBOS_BR_TARGET),pumpkin-mbm2)
 	KUBOS_TARGET = kubos-linux-pumpkin-mbm2-gcc
-	CARGO_TARGET = arm-unknown-linux-gnueabihf
+	CARGO_TARGET = armv7-unknown-linux-gnueabihf
 else ifeq ($(KUBOS_BR_TARGET),beaglebone-black)
 	KUBOS_TARGET = kubos-linux-beaglebone-gcc
-	CARGO_TARGET = arm-unknown-linux-gnueabihf
+	CARGO_TARGET = armv7-unknown-linux-gnueabihf
 else
 	KUBOS_TARGET = unknown
 endif
 
-CARGO_OUTPUT_DIR = target/$(CARGO_TARGET)/release
 
 define KUBOS_INSTALL_STAGING_CMDS
 	mkdir -p $(KUBOS_CONFIG_FRAGMENT_DIR)
@@ -66,13 +72,13 @@ kubos-deepclean:
 	rm -f $(KUBOS_CONFIG_FILE)
 
 kubos-fullclean: kubos-clean-for-reconfigure kubos-dirclean
-	rm -f $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/.stamp_downloaded
+	rm -f $(KUBOS_DIR)/.stamp_downloaded
 	rm -f $(DL_DIR)/kubos-$(KUBOS_VERSION).tar.gz
 	rm -fR $(KUBOS_CONFIG_FRAGMENT_DIR)
 	rm -fR $(BUILD_DIR)/../staging/etc/kubos
 	rm -f $(KUBOS_CONFIG_FILE)
 
 kubos-clean: kubos-clean-for-rebuild
-	rm -fR $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/target
+	rm -fR $(KUBOS_DIR)/target
 
 $(eval $(generic-package))

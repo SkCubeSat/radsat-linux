@@ -11,7 +11,7 @@ KUBOS_CORE_TELEMETRY_DB_POST_INSTALL_TARGET_HOOKS += TELEMETRY_DB_INSTALL_TARGET
 KUBOS_CORE_TELEMETRY_DB_POST_INSTALL_TARGET_HOOKS += TELEMETRY_DB_INSTALL_INIT_SYSV
 
 define TELEMETRY_DB_BUILD_CMDS
-	cd $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/services/telemetry-service && \
+	cd $(KUBOS_SOURCE_DIR)/services/telemetry-service && \
 	PATH=$(PATH):~/.cargo/bin && \
 	CC=$(TARGET_CC) RUSTFLAGS="-Clinker=$(TARGET_CC)" cargo build --package telemetry-service --target $(CARGO_TARGET) --release
 endef
@@ -30,8 +30,8 @@ endef
 define TELEMETRY_DB_INSTALL_TARGET_CMDS
 	mkdir -p $(TARGET_DIR)/usr/sbin
 	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/usr/bin && \
-	arm-linux-strip $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/telemetry-service
-	$(INSTALL) -D -m 0755 $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/telemetry-service \
+	arm-linux-strip $(KUBOS_CARGO_OUTPUT_DIR)/telemetry-service
+	$(INSTALL) -D -m 0755 $(KUBOS_CARGO_OUTPUT_DIR)/telemetry-service \
 		$(TARGET_DIR)/usr/sbin
 		
 	echo 'CHECK PROCESS kubos-telemetry-db PIDFILE /var/run/telemetry-service.pid' > $(TARGET_DIR)/etc/monit.d/kubos-telemetry-db.cfg
@@ -47,7 +47,7 @@ define TELEMETRY_DB_INSTALL_INIT_SYSV
 endef
 
 kubos-core-telemetry-db-cargoclean: kubos-core-telemetry-db-dirclean
-	cd $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/services/telemetry-service && \
+	cd $(KUBOS_SOURCE_DIR)/services/telemetry-service && \
 	PATH=$(PATH):~/.cargo/bin && \
 	cargo clean
 

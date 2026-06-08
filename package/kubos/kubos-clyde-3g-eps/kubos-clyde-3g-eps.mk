@@ -11,7 +11,7 @@ KUBOS_CLYDE_3G_EPS_POST_INSTALL_TARGET_HOOKS += CLYDE_3G_EPS_INSTALL_TARGET_CMDS
 KUBOS_CLYDE_3G_EPS_POST_INSTALL_TARGET_HOOKS += CLYDE_3G_EPS_INSTALL_INIT_SYSV
 
 define CLYDE_3G_EPS_BUILD_CMDS
-	cd $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/services/clyde-3g-eps-service && \
+	cd $(KUBOS_SOURCE_DIR)/services/clyde-3g-eps-service && \
 	PATH=$(PATH):~/.cargo/bin && \
 	CC=$(TARGET_CC) RUSTFLAGS="-Clinker=$(TARGET_CC)" cargo build --package clyde-3g-eps-service --target $(CARGO_TARGET) --release
 endef
@@ -29,8 +29,8 @@ endef
 define CLYDE_3G_EPS_INSTALL_TARGET_CMDS
 	mkdir -p $(TARGET_DIR)/usr/sbin
 	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/usr/bin && \
-	arm-linux-strip $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/clyde-3g-eps-service
-	$(INSTALL) -D -m 0755 $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/clyde-3g-eps-service \
+	arm-linux-strip $(KUBOS_CARGO_OUTPUT_DIR)/clyde-3g-eps-service
+	$(INSTALL) -D -m 0755 $(KUBOS_CARGO_OUTPUT_DIR)/clyde-3g-eps-service \
 		$(TARGET_DIR)/usr/sbin
 		
 	echo 'CHECK PROCESS kubos-clyde-3g-eps PIDFILE /var/run/clyde-3g-eps-service.pid' > $(TARGET_DIR)/etc/monit.d/kubos-clyde-3g-eps.cfg
@@ -46,7 +46,7 @@ define CLYDE_3G_EPS_INSTALL_INIT_SYSV
 endef
 
 kubos-clyde-3g-eps-cargoclean: kubos-clyde-3g-eps-dirclean
-	cd $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/services/clyde-3g-eps-service && \
+	cd $(KUBOS_SOURCE_DIR)/services/clyde-3g-eps-service && \
 	PATH=$(PATH):~/.cargo/bin && \
 	cargo clean
 

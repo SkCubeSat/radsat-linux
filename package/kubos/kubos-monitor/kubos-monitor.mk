@@ -11,7 +11,7 @@ KUBOS_MONITOR_POST_INSTALL_TARGET_HOOKS += MONITOR_INSTALL_TARGET_CMDS
 KUBOS_MONITOR_POST_INSTALL_TARGET_HOOKS += MONITOR_INSTALL_INIT_SYSV
 
 define MONITOR_BUILD_CMDS
-	cd $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/services/monitor-service && \
+	cd $(KUBOS_SOURCE_DIR)/services/monitor-service && \
 	PATH=$(PATH):~/.cargo/bin:/usr/bin/iobc_toolchain/usr/bin && \
 	CC=$(TARGET_CC) RUSTFLAGS="-Clinker=$(TARGET_CC)" cargo build --package monitor-service --target $(CARGO_TARGET) --release
 endef
@@ -27,8 +27,8 @@ endef
 define MONITOR_INSTALL_TARGET_CMDS
 	mkdir -p $(TARGET_DIR)/usr/sbin
 	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/usr/bin && \
-	arm-linux-strip $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/monitor-service
-	$(INSTALL) -D -m 0755 $(BUILD_DIR)/kubos-$(KUBOS_VERSION)/$(CARGO_OUTPUT_DIR)/monitor-service \
+	arm-linux-strip $(KUBOS_CARGO_OUTPUT_DIR)/monitor-service
+	$(INSTALL) -D -m 0755 $(KUBOS_CARGO_OUTPUT_DIR)/monitor-service \
 		$(TARGET_DIR)/usr/sbin
 				
 	echo 'CHECK PROCESS kubos-monitor PIDFILE /var/run/monitor-service.pid' > $(TARGET_DIR)/etc/monit.d/kubos-monitor.cfg
