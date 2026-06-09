@@ -1,3 +1,2 @@
-# md5 from https://pypi.python.org/pypi/graphql-relay/json, sha256 locally computed
-md5	1d20e070f039229063c948ef9d8889a6  graphql-relay-0.4.5.tar.gz
-sha256	2716b7245d97091af21abf096fabafac576905096d21ba7118fba722596f65db  graphql-relay-0.4.5.tar.gz
+# Locally computed
+sha256  1ff1c51298356e481a0be009ccdff249832ce53f30559c1338f22a0e0d17250c  graphql-relay-3.2.0.tar.gz

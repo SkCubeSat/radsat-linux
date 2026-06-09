@@ -1,3 +1,2 @@
-# md5 from https://pypi.python.org/pypi/graphene/json, sha256 locally computed
-md5	43325eb10624c4fe614d8075f88a1762  graphene-2.1.1.tar.gz
-sha256	76c670f6184eb311c9f4a23b770f114aa032e42eefe509a10a306e1745f70407  graphene-2.1.1.tar.gz
+# Locally computed
+sha256  2a3786948ce75fe7e078443d37f609cbe5bb36ad8d6b828740ad3b95ed1a0aaa  graphene-3.4.3.tar.gz

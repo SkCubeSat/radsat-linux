@@ -16,21 +16,14 @@
 #
 # kubos-package: Create Kubos Linux Upgrade Package (kpack)
 #
- 
+
+set -e
+
 version=$(date +%Y.%m.%d)
 input=kpack.its
 branch=1.2
 rflag=false
 output=output
-
-if [[ $(/usr/bin/id -u) -ne 0 ]]; then
-    echo "Please run script as root"
-    exit
-fi
-
-# Make sure that we can find the `dtc` command
-# (The binary is target-independent so we can just use the one in the BBB toolchain directory)
-export PATH=$PATH:/usr/bin/bbb_toolchain/usr/bin
 
 # Process command arguments
 
@@ -69,10 +62,9 @@ fi
 rootfs_dir=${BASE_DIR}/images
 
 # Copy the package .its file
-cp ${input} ${rootfs_dir}/
-input_name=$(basename ${input})
+cp "${input}" "${rootfs_dir}/"
+input_name=$(basename "${input}")
 
 # Build the full package
-${BASE_DIR}/build/uboot-${branch}/tools/mkimage -E -f ${rootfs_dir}/${input_name} kpack-${version}.itb
-
-
+"${BASE_DIR}/build/uboot-${branch}/tools/mkimage" \
+    -E -f "${rootfs_dir}/${input_name}" "kpack-${version}.itb"

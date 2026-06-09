@@ -12,7 +12,7 @@ KUBOS_NOVATEL_OEM6_POST_INSTALL_TARGET_HOOKS += OEM6_INSTALL_INIT_SYSV
 
 define OEM6_BUILD_CMDS
 	cd $(KUBOS_SOURCE_DIR)/services/novatel-oem6-service && \
-	PATH=$(PATH):~/.cargo/bin:/usr/bin/iobc_toolchain/usr/bin && \
+	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/bin && \
 	CC=$(TARGET_CC) RUSTFLAGS="-Clinker=$(TARGET_CC)" cargo build --package novatel-oem6-service --target $(CARGO_TARGET) --release
 endef
 
@@ -28,8 +28,8 @@ endef
 # Install the application into the rootfs file system
 define OEM6_INSTALL_TARGET_CMDS
 	mkdir -p $(TARGET_DIR)/usr/sbin
-	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/usr/bin && \
-	arm-linux-strip $(KUBOS_CARGO_OUTPUT_DIR)/novatel-oem6-service
+	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/bin && \
+	$(TARGET_STRIP) $(KUBOS_CARGO_OUTPUT_DIR)/novatel-oem6-service
 	$(INSTALL) -D -m 0755 $(KUBOS_CARGO_OUTPUT_DIR)/novatel-oem6-service \
 		$(TARGET_DIR)/usr/sbin
 				

@@ -1,0 +1,56 @@
+From 790756c7e0229dedc83bf058ac69633045b1000e Mon Sep 17 00:00:00 2001
+From: Nick Desaulniers <ndesaulniers@google.com>
+Date: Mon, 4 Nov 2019 19:31:45 +0100
+Subject: [PATCH] ARM: replace Solaris-style section flags
+
+Replace the legacy #alloc and #execinstr section flags used by the
+BeagleBone Black build with GNU-style strings. This is the target-specific
+subset of upstream commit 790756c7e022.
+
+Upstream: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=790756c7e0229dedc83bf058ac69633045b1000e
+Signed-off-by: Nick Desaulniers <ndesaulniers@google.com>
+Signed-off-by: Russell King <rmk+kernel@armlinux.org.uk>
+---
+ arch/arm/boot/compressed/head.S      | 2 +-
+ arch/arm/boot/compressed/piggy.lz4.S | 2 +-
+ arch/arm/mm/proc-v7.S                | 2 +-
+ 3 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/arch/arm/boot/compressed/head.S b/arch/arm/boot/compressed/head.S
+index 7a6d2d5..f34f65d 100644
+--- a/arch/arm/boot/compressed/head.S
++++ b/arch/arm/boot/compressed/head.S
+@@ -112,7 +112,7 @@
+ #endif
+ 		.endm
+ 
+-		.section ".start", #alloc, #execinstr
++		.section ".start", "ax"
+ /*
+  * sort out different calling conventions
+  */
+diff --git a/arch/arm/boot/compressed/piggy.lz4.S b/arch/arm/boot/compressed/piggy.lz4.S
+index 79c15cd..a97ea50 100644
+--- a/arch/arm/boot/compressed/piggy.lz4.S
++++ b/arch/arm/boot/compressed/piggy.lz4.S
+@@ -1,4 +1,4 @@
+-	.section .piggydata,#alloc
++	.section .piggydata, "a"
+ 	.globl	input_data
+ input_data:
+ 	.incbin	"arch/arm/boot/compressed/piggy.lz4"
+diff --git a/arch/arm/mm/proc-v7.S b/arch/arm/mm/proc-v7.S
+index d00d52c..3cbb867 100644
+--- a/arch/arm/mm/proc-v7.S
++++ b/arch/arm/mm/proc-v7.S
+@@ -504,7 +504,7 @@ cpu_elf_name:
+ 	string	cpu_elf_name, "v7"
+ 	.align
+ 
+-	.section ".proc.info.init", #alloc
++	.section ".proc.info.init", "a"
+ 
+ 	/*
+ 	 * Standard v7 proc info content
+-- 
+2.43.0

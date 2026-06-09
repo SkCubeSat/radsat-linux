@@ -14,7 +14,7 @@ KUBOS_NSL_DUPLEX_POST_INSTALL_TARGET_HOOKS += NSL_DUPLEX_INSTALL_INIT_SYSV
 
 define NSL_DUPLEX_BUILD_CMDS
 	cd $(KUBOS_SOURCE_DIR)/services/nsl-duplex-d2-comms-service && \
-	PATH=$(PATH):~/.cargo/bin:/usr/bin/iobc_toolchain/usr/bin && \
+	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/bin && \
 	PKG_CONFIG_ALLOW_CROSS=1 CC=$(TARGET_CC) RUSTFLAGS="-Clinker=$(TARGET_CC)" cargo build --package nsl-duplex-d2-comms-service --target $(CARGO_TARGET) --release
 endef
 
@@ -37,8 +37,8 @@ endef
 # Install the application into the rootfs file system
 define NSL_DUPLEX_INSTALL_TARGET_CMDS
 	mkdir -p $(TARGET_DIR)/usr/sbin
-	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/usr/bin && \
-	arm-linux-strip $(KUBOS_CARGO_OUTPUT_DIR)/nsl-duplex-d2-comms-service
+	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/bin && \
+	$(TARGET_STRIP) $(KUBOS_CARGO_OUTPUT_DIR)/nsl-duplex-d2-comms-service
 	$(INSTALL) -D -m 0755 $(KUBOS_CARGO_OUTPUT_DIR)/nsl-duplex-d2-comms-service \
 		$(TARGET_DIR)/usr/sbin
 		

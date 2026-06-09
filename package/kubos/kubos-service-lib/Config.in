@@ -1,12 +1,12 @@
 config BR2_PACKAGE_KUBOS_SERVICE_LIB
-    bool "Kubos Service Python Library"
-    default n
-    depends on BR2_PACKAGE_PYTHON3
-    select BR2_PACKAGE_PYTHON_FLASK_GRAPHQL
-    select BR2_PACKAGE_PYTHON_GRAPHENE
-    select BR2_PACKAGE_PYTHON_TOML
-    help
-        Include the Kubos service library for Python.
-        
-        This library simplifies the process of writing servives.
-        It should be included if you intend to use services which are written in Python.
+	bool "Kubos Service Python Library"
+	depends on BR2_PACKAGE_PYTHON3
+	select BR2_PACKAGE_PYTHON_FLASK
+	select BR2_PACKAGE_PYTHON_GRAPHENE
+	select BR2_PACKAGE_PYTHON_GRAPHQL_SERVER
+	select BR2_PACKAGE_PYTHON_TOML
+	help
+	  Include the Kubos service library for Python.
+
+	  This library simplifies writing services. Include it when
+	  using services written in Python.

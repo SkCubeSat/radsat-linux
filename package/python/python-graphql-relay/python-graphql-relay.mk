@@ -4,10 +4,11 @@
 #
 ################################################################################
 
-PYTHON_GRAPHQL_RELAY_VERSION = 0.4.5
+PYTHON_GRAPHQL_RELAY_VERSION = 3.2.0
 PYTHON_GRAPHQL_RELAY_SOURCE = graphql-relay-$(PYTHON_GRAPHQL_RELAY_VERSION).tar.gz
-PYTHON_GRAPHQL_RELAY_SITE = https://pypi.python.org/packages/5e/b0/b91fadc180544fc9e3c156d7049561fd5f1e2211d26fd29033548fd50934
-PYTHON_GRAPHQL_RELAY_SETUP_TYPE = setuptools
+PYTHON_GRAPHQL_RELAY_SITE = https://files.pythonhosted.org/packages/d1/13/98fbf8d67552f102488ffc16c6f559ce71ea15f6294728d33928ab5ff14d
+PYTHON_GRAPHQL_RELAY_SETUP_TYPE = poetry
 PYTHON_GRAPHQL_RELAY_LICENSE = MIT
+PYTHON_GRAPHQL_RELAY_LICENSE_FILES = LICENSE
 
 $(eval $(python-package))

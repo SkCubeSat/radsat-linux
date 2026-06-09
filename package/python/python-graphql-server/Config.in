@@ -1,0 +1,7 @@
+config BR2_PACKAGE_PYTHON_GRAPHQL_SERVER
+	bool "python-graphql-server"
+	select BR2_PACKAGE_PYTHON_GRAPHQL_CORE # runtime
+	help
+	  GraphQL server integrations for Python web frameworks.
+
+	  https://github.com/graphql-python/graphql-server

@@ -20,9 +20,9 @@ permissions:
   contents: read
 
 env:
-  BUILDROOT_VERSION: 2019.02.2
+  BUILDROOT_VERSION: 2025.02.14
   BUILDROOT_SHA256: >-
-    d3fc09b620f5b41f59b8294387e6db086bb2da2e922d8398c9e6090a0a1094c6
+    dc36c895d189d37f443d0352202ffd6a2436afcaf21570b4d9fbb177b56dee0b
   KUBOS_BUILD_IMAGE: kubos/kubos-dev
   KUBOS_BUILD_IMAGE_DIGEST: >-
     sha256:cd1a02e19b522d045b17bee6fb67a9f7909bb758eaa97ffd804d151b0e3d21b4
@@ -137,22 +137,48 @@ jobs:
                 sh -s -- -y --default-toolchain 1.93.0 --profile minimal
               export PATH="${HOME}/.cargo/bin:${PATH}"
               rustup target add armv7-unknown-linux-gnueabihf
-              rm -f /usr/bin/arm-linux-gnueabihf_toolchain
-              rm -f /usr/bin/arm-linux-gnueabihf_toolchain-wrapper
 
               make BR2_EXTERNAL=/workspace/radsat-linux \
                 beaglebone-black_defconfig
-              make linux-dirclean
               make
             '
 
       - name: Collect build artifacts
+        env:
+          SOFTWARE_TAG: ${{ steps.software-version.outputs.software_tag }}
         run: |
           mkdir -p artifacts
           image_dir="buildroot-${BUILDROOT_VERSION}/output/images"
-          cp "${image_dir}/sdcard.img" artifacts/
-          cp "${image_dir}/zImage" artifacts/
-          cp "${image_dir}/am335x-boneblack.dtb" artifacts/
+          cp \
+            "${image_dir}/kubos-linux.tar.gz" \
+            "${image_dir}/aux-sd.tar.gz" \
+            "${image_dir}/kernel" \
+            "${image_dir}/zImage" \
+            "${image_dir}/beaglebone-black.dtb" \
+            "${image_dir}/MLO" \
+            "${image_dir}/u-boot.img" \
+            artifacts/
+
+          {
+            echo "radsat-linux=${GITHUB_SHA}"
+            echo "software_tag=${SOFTWARE_TAG}"
+            echo "software_commit=$(git -C Software rev-parse HEAD)"
+            echo "buildroot=${BUILDROOT_VERSION}"
+            echo "linux=4.4.23"
+          } > artifacts/build-info.txt
+
+          (
+            cd artifacts
+            sha256sum \
+              aux-sd.tar.gz \
+              beaglebone-black.dtb \
+              kernel \
+              kubos-linux.tar.gz \
+              MLO \
+              u-boot.img \
+              zImage \
+              > SHA256SUMS
+          )
 
       - name: Upload Linux image
         uses: actions/upload-artifact@v4

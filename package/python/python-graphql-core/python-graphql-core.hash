@@ -1,3 +1,2 @@
-# md5 from https://pypi.python.org/pypi/graphql-core/json, sha256 locally computed
-md5	8552768d3f32ea42b948efa8a37fd15f  graphql-core-2.0.tar.gz
-sha256	4830699be53f9154273fa15726fc8b0c90bc22bbb8fc7c932586503b3cb9330e  graphql-core-2.0.tar.gz
+# Locally computed
+sha256  27b6904bdd3b43f2a0556dad5d579bdfdeab1f38e8e8788e555bdcb586a6f62c  graphql_core-3.2.7.tar.gz

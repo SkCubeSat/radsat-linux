@@ -28,8 +28,8 @@ endef
 # Install the application into the rootfs file system
 define CLYDE_3G_EPS_INSTALL_TARGET_CMDS
 	mkdir -p $(TARGET_DIR)/usr/sbin
-	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/usr/bin && \
-	arm-linux-strip $(KUBOS_CARGO_OUTPUT_DIR)/clyde-3g-eps-service
+	PATH=$(PATH):~/.cargo/bin:$(HOST_DIR)/bin && \
+	$(TARGET_STRIP) $(KUBOS_CARGO_OUTPUT_DIR)/clyde-3g-eps-service
 	$(INSTALL) -D -m 0755 $(KUBOS_CARGO_OUTPUT_DIR)/clyde-3g-eps-service \
 		$(TARGET_DIR)/usr/sbin
 		
