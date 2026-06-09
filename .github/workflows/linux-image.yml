@@ -153,6 +153,7 @@ jobs:
 
               make BR2_EXTERNAL=/workspace/radsat-linux \
                 beaglebone-black_defconfig
+              make source
               make
               make ccache-stats
             '
