@@ -29,10 +29,20 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on:
+      - self-hosted
+      - linux
+      - x64
     timeout-minutes: 180
 
     steps:
+      - name: Verify runner prerequisites
+        run: |
+          echo "Runner: ${RUNNER_NAME}"
+          echo "Workspace: ${GITHUB_WORKSPACE}"
+          df -h "${GITHUB_WORKSPACE}"
+          docker info >/dev/null
+
       - name: Require checkout token
         env:
           CI_CHECKOUT_TOKEN: ${{ secrets.CI_CHECKOUT_TOKEN }}
@@ -158,6 +168,25 @@ jobs:
               make ccache-stats
             '
 
+      - name: Report disk usage
+        if: always()
+        run: |
+          df -h /
+
+          for path in \
+            buildroot-dl \
+            buildroot-ccache \
+            "buildroot-${BUILDROOT_VERSION}/output" \
+            "buildroot-${BUILDROOT_VERSION}/output/build" \
+            "buildroot-${BUILDROOT_VERSION}/output/target" \
+            "buildroot-${BUILDROOT_VERSION}/output/images"; do
+            if [[ -e "${path}" ]]; then
+              du -sh "${path}"
+            fi
+          done
+
+          du -sh /var/lib/docker 2>/dev/null || true
+
       - name: Collect build artifacts
         env:
           SOFTWARE_TAG: ${{ steps.software-version.outputs.software_tag }}
@@ -165,7 +194,7 @@ jobs:
           mkdir -p artifacts
           output_dir="buildroot-${BUILDROOT_VERSION}/output"
           image_dir="${output_dir}/images"
-          cp \
+          cp --link \
             "${image_dir}/kubos-linux.tar.gz" \
             "${image_dir}/aux-sd.tar.gz" \
             "${image_dir}/kernel" \
@@ -174,7 +203,7 @@ jobs:
             "${image_dir}/MLO" \
             "${image_dir}/u-boot.img" \
             artifacts/
-          cp "${output_dir}/build/build-time.log" artifacts/
+          cp --link "${output_dir}/build/build-time.log" artifacts/
 
           python3 - artifacts/build-time.log \
             artifacts/build-time-summary.txt <<'PY'
