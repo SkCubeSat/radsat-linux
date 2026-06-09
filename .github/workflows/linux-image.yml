@@ -30,7 +30,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 360
+    timeout-minutes: 180
 
     steps:
       - name: Require checkout token
@@ -44,7 +44,7 @@ jobs:
           fi
 
       - name: Check out radsat-linux
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: radsat-linux
           fetch-depth: 0
@@ -75,7 +75,7 @@ jobs:
           echo "Building with SkCubeSat/Software tag ${software_tag}"
 
       - name: Check out tagged Software source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: SkCubeSat/Software
           ref: ${{ steps.software-version.outputs.software_tag }}
@@ -104,7 +104,7 @@ jobs:
           fi
 
       - name: Cache Buildroot downloads
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: buildroot-dl
           key: >-
@@ -112,6 +112,16 @@ jobs:
             hashFiles('radsat-linux/configs/beaglebone-black_defconfig') }}
           restore-keys: |
             buildroot-${{ env.BUILDROOT_VERSION }}-
+
+      - name: Cache Buildroot compiler objects
+        uses: actions/cache@v5
+        with:
+          path: buildroot-ccache
+          key: >-
+            buildroot-ccache-v1-${{ runner.os }}-${{
+            env.BUILDROOT_VERSION }}-${{ github.sha }}
+          restore-keys: |
+            buildroot-ccache-v1-${{ runner.os }}-${{ env.BUILDROOT_VERSION }}-
 
       - name: Download Buildroot
         run: |
@@ -124,12 +134,15 @@ jobs:
 
       - name: Build Linux image
         run: |
-          mkdir -p buildroot-dl
+          mkdir -p buildroot-dl buildroot-ccache ci-home
           docker run --rm \
+            --user "$(id -u):$(id -g)" \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --workdir "/workspace/buildroot-${BUILDROOT_VERSION}" \
+            --env BR2_CCACHE_DIR=/workspace/buildroot-ccache \
             --env BR2_DL_DIR=/workspace/buildroot-dl \
             --env BR2_JLEVEL=0 \
+            --env HOME=/workspace/ci-home \
             --env KUBOS_OVERRIDE_SRCDIR=/workspace/Software \
             "${KUBOS_BUILD_IMAGE}@${KUBOS_BUILD_IMAGE_DIGEST}" \
             bash -euxo pipefail -c '
@@ -141,6 +154,7 @@ jobs:
               make BR2_EXTERNAL=/workspace/radsat-linux \
                 beaglebone-black_defconfig
               make
+              make ccache-stats
             '
 
       - name: Collect build artifacts
@@ -148,7 +162,8 @@ jobs:
           SOFTWARE_TAG: ${{ steps.software-version.outputs.software_tag }}
         run: |
           mkdir -p artifacts
-          image_dir="buildroot-${BUILDROOT_VERSION}/output/images"
+          output_dir="buildroot-${BUILDROOT_VERSION}/output"
+          image_dir="${output_dir}/images"
           cp \
             "${image_dir}/kubos-linux.tar.gz" \
             "${image_dir}/aux-sd.tar.gz" \
@@ -158,6 +173,61 @@ jobs:
             "${image_dir}/MLO" \
             "${image_dir}/u-boot.img" \
             artifacts/
+          cp "${output_dir}/build/build-time.log" artifacts/
+
+          python3 - artifacts/build-time.log \
+            artifacts/build-time-summary.txt <<'PY'
+          import collections
+          import re
+          import sys
+
+          source, destination = sys.argv[1:]
+          starts = {}
+          durations = collections.defaultdict(float)
+          first = None
+          last = None
+
+          pattern = re.compile(
+              r"^([0-9.]+):(start|end)\s*:([^:]+):\s*(.+?)\s*$"
+          )
+          with open(source, encoding="utf-8") as build_log:
+              for line in build_log:
+                  match = pattern.match(line)
+                  if not match:
+                      continue
+
+                  timestamp = float(match.group(1))
+                  event = match.group(2)
+                  phase = match.group(3).strip()
+                  package = match.group(4).strip()
+                  key = (phase, package)
+                  first = timestamp if first is None else min(first, timestamp)
+                  last = timestamp if last is None else max(last, timestamp)
+
+                  if event == "start":
+                      starts[key] = timestamp
+                  elif key in starts:
+                      durations[package] += timestamp - starts.pop(key)
+
+          with open(destination, "w", encoding="utf-8") as summary:
+              elapsed = 0 if first is None else last - first
+              summary.write(
+                  f"Measured Buildroot package time: {elapsed / 60:.1f} min\n"
+              )
+              summary.write("\nLongest package builds:\n")
+              for package, seconds in sorted(
+                  durations.items(), key=lambda item: item[1], reverse=True
+              )[:25]:
+                  summary.write(f"{seconds / 60:7.1f} min  {package}\n")
+          PY
+
+          {
+            echo "## Build timing"
+            echo
+            echo '```text'
+            cat artifacts/build-time-summary.txt
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
 
           {
             echo "radsat-linux=${GITHUB_SHA}"
@@ -181,7 +251,7 @@ jobs:
           )
 
       - name: Upload Linux image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.software-version.outputs.artifact_name }}
           path: artifacts/
