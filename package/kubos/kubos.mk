@@ -31,7 +31,9 @@ KUBOS_VERSION = $(call qstrip,$(BR2_KUBOS_VERSION))
 # Cargo metadata lives at the Software repository root, while the Kubos source
 # remains under kubos/. These paths are shared by the legacy child packages.
 KUBOS_SOURCE_DIR = $(KUBOS_DIR)/kubos
-KUBOS_CARGO_OUTPUT_DIR = $(KUBOS_DIR)/target/$(CARGO_TARGET)/release
+KUBOS_CARGO_TARGET_DIR = \
+	$(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(KUBOS_DIR)/target)
+KUBOS_CARGO_OUTPUT_DIR = $(KUBOS_CARGO_TARGET_DIR)/$(CARGO_TARGET)/release
 
 KUBOS_BR_TARGET = $(lastword $(subst /, ,$(dir $(BR2_LINUX_KERNEL_CUSTOM_DTS_PATH))))
 ifeq ($(KUBOS_BR_TARGET),at91sam9g20isis)
