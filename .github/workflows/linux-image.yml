@@ -192,6 +192,17 @@ jobs:
               fi
               make source
               make
+
+              strings output/images/u-boot.bin > output/images/u-boot.strings
+              grep -Fx "baudrate=921600" output/images/u-boot.strings
+              grep -Fx "console=ttyS0,921600" output/images/u-boot.strings
+              grep -Fqx \
+                "CONFIG_CMDLINE=\"console=ttyS0,921600n8 root=/dev/mmcblk0p2 rw rootfstype=ext4 rootwait\"" \
+                output/build/linux-4.4.23/.config
+              grep -Eq \
+                "^ttyS0::respawn:/sbin/getty .*[[:space:]]921600[[:space:]]" \
+                output/target/etc/inittab
+
               make ccache-stats || true
             '
 
