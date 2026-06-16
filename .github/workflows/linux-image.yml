@@ -192,10 +192,11 @@ jobs:
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --volume "${BUILD_CACHE_ROOT}/buildroot-dl:/cache/buildroot-dl" \
             --volume "${BUILD_CACHE_ROOT}/buildroot-ccache/${BUILDROOT_VERSION}:/cache/buildroot-ccache" \
-            --volume "${BUILD_OUTPUT_CACHE}:/workspace/buildroot-${BUILDROOT_VERSION}/output" \
+            --volume "${BUILD_OUTPUT_CACHE}:/cache/buildroot-output" \
             --volume "${BUILD_CACHE_ROOT}/cargo:/cache/cargo" \
             --volume "${BUILD_CACHE_ROOT}/cargo-target:/cache/cargo-target" \
             --workdir "/workspace/buildroot-${BUILDROOT_VERSION}" \
+            --env BUILDROOT_OUTPUT=/cache/buildroot-output \
             --env BR2_CCACHE_DIR=/cache/buildroot-ccache \
             --env BR2_DL_DIR=/cache/buildroot-dl \
             --env BR2_JLEVEL=0 \
@@ -208,37 +209,41 @@ jobs:
             bash -euxo pipefail -c '
               rustc --version
               cargo --version
-              make BR2_EXTERNAL=/workspace/radsat-linux \
+              make O="${BUILDROOT_OUTPUT}" \
+                BR2_EXTERNAL=/workspace/radsat-linux \
                 beaglebone-black_defconfig
-              if ! grep -qx "BR2_CCACHE=y" .config; then
+              if ! grep -qx "BR2_CCACHE=y" "${BUILDROOT_OUTPUT}/.config"; then
                 echo "Buildroot disabled ccache; host GCC 8 or newer is required."
                 exit 1
               fi
 
-              kernel_hash_file=output/.radsat-linux-kernel-inputs.sha256
-              if [[ -d output/build/linux-4.4.23 ]]; then
+              kernel_hash_file="${BUILDROOT_OUTPUT}/.radsat-linux-kernel-inputs.sha256"
+              if [[ -d "${BUILDROOT_OUTPUT}/build/linux-4.4.23" ]]; then
                 previous_kernel_hash="$(cat "${kernel_hash_file}" 2>/dev/null || true)"
                 if [[ "${previous_kernel_hash}" != "${KERNEL_INPUT_HASH}" ]]; then
                   echo "Linux inputs changed; cleaning Buildroot linux package."
-                  make linux-dirclean
+                  make O="${BUILDROOT_OUTPUT}" linux-dirclean
                 fi
               fi
 
-              make source
-              make
+              make O="${BUILDROOT_OUTPUT}" source
+              make O="${BUILDROOT_OUTPUT}"
               printf "%s\n" "${KERNEL_INPUT_HASH}" > "${kernel_hash_file}"
 
-              strings output/images/u-boot.bin > output/images/u-boot.strings
-              grep -Fx "baudrate=921600" output/images/u-boot.strings
-              grep -Fx "console=ttyS0,921600" output/images/u-boot.strings
+              strings "${BUILDROOT_OUTPUT}/images/u-boot.bin" \
+                > "${BUILDROOT_OUTPUT}/images/u-boot.strings"
+              grep -Fx "baudrate=921600" \
+                "${BUILDROOT_OUTPUT}/images/u-boot.strings"
+              grep -Fx "console=ttyS0,921600" \
+                "${BUILDROOT_OUTPUT}/images/u-boot.strings"
               grep -Fqx \
                 "CONFIG_CMDLINE=\"console=ttyS0,921600n8 root=/dev/mmcblk0p2 rw rootfstype=ext4 rootwait\"" \
-                output/build/linux-4.4.23/.config
+                "${BUILDROOT_OUTPUT}/build/linux-4.4.23/.config"
               grep -Eq \
                 "^ttyS0::respawn:/sbin/getty .*[[:space:]]921600[[:space:]]" \
-                output/target/etc/inittab
+                "${BUILDROOT_OUTPUT}/target/etc/inittab"
 
-              make ccache-stats || true
+              make O="${BUILDROOT_OUTPUT}" ccache-stats || true
             '
 
       - name: Report disk usage
