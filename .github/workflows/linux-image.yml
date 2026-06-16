@@ -126,13 +126,19 @@ jobs:
             rm -rf "${cache_root}"
           fi
 
+          board="beaglebone-black"
+          software_commit="$(git -C Software rev-parse --short=12 HEAD)"
+          output_cache="${cache_root}/buildroot-output/${BUILDROOT_VERSION}/${board}/${software_commit}"
+
           mkdir -p \
             "${cache_root}/archives" \
             "${cache_root}/buildroot-dl" \
             "${cache_root}/buildroot-ccache/${BUILDROOT_VERSION}" \
             "${cache_root}/cargo" \
-            "${cache_root}/cargo-target"
+            "${cache_root}/cargo-target" \
+            "${output_cache}"
           echo "BUILD_CACHE_ROOT=${cache_root}" >> "${GITHUB_ENV}"
+          echo "BUILD_OUTPUT_CACHE=${output_cache}" >> "${GITHUB_ENV}"
 
       - name: Prepare pinned builder image
         run: |
@@ -164,12 +170,29 @@ jobs:
 
       - name: Build Linux image
         run: |
+          kernel_input_hash="$(
+            while IFS= read -r -d '' file; do
+              sha256sum "radsat-linux/${file}"
+            done < <(
+              git -C radsat-linux ls-files -z -- \
+                configs/beaglebone-black_defconfig \
+                common/linux-kubos.config \
+                common/patches/linux \
+                board/kubos/beaglebone-black/linux \
+                board/kubos/beaglebone-black/linux-kubos.config \
+                board/kubos/beaglebone-black/beaglebone-black.dts \
+                board/kubos/beaglebone-black/am33xx-boneblack.dtsi
+            ) | sha256sum | awk "{print \$1}"
+          )"
+          echo "Linux input hash: ${kernel_input_hash}"
+
           mkdir -p ci-home
           docker run --rm \
             --user "$(id -u):$(id -g)" \
             --volume "${GITHUB_WORKSPACE}:/workspace" \
             --volume "${BUILD_CACHE_ROOT}/buildroot-dl:/cache/buildroot-dl" \
             --volume "${BUILD_CACHE_ROOT}/buildroot-ccache/${BUILDROOT_VERSION}:/cache/buildroot-ccache" \
+            --volume "${BUILD_OUTPUT_CACHE}:/workspace/buildroot-${BUILDROOT_VERSION}/output" \
             --volume "${BUILD_CACHE_ROOT}/cargo:/cache/cargo" \
             --volume "${BUILD_CACHE_ROOT}/cargo-target:/cache/cargo-target" \
             --workdir "/workspace/buildroot-${BUILDROOT_VERSION}" \
@@ -179,6 +202,7 @@ jobs:
             --env CARGO_HOME=/cache/cargo \
             --env CARGO_TARGET_DIR=/cache/cargo-target \
             --env HOME=/workspace/ci-home \
+            --env KERNEL_INPUT_HASH="${kernel_input_hash}" \
             --env KUBOS_OVERRIDE_SRCDIR=/workspace/Software \
             "${BUILDER_IMAGE}" \
             bash -euxo pipefail -c '
@@ -190,8 +214,19 @@ jobs:
                 echo "Buildroot disabled ccache; host GCC 8 or newer is required."
                 exit 1
               fi
+
+              kernel_hash_file=output/.radsat-linux-kernel-inputs.sha256
+              if [[ -d output/build/linux-4.4.23 ]]; then
+                previous_kernel_hash="$(cat "${kernel_hash_file}" 2>/dev/null || true)"
+                if [[ "${previous_kernel_hash}" != "${KERNEL_INPUT_HASH}" ]]; then
+                  echo "Linux inputs changed; cleaning Buildroot linux package."
+                  make linux-dirclean
+                fi
+              fi
+
               make source
               make
+              printf "%s\n" "${KERNEL_INPUT_HASH}" > "${kernel_hash_file}"
 
               strings output/images/u-boot.bin > output/images/u-boot.strings
               grep -Fx "baudrate=921600" output/images/u-boot.strings
@@ -214,12 +249,12 @@ jobs:
           for path in \
             "${BUILD_CACHE_ROOT:-${HOME}/.cache/radsat-linux}/buildroot-dl" \
             "${BUILD_CACHE_ROOT:-${HOME}/.cache/radsat-linux}/buildroot-ccache" \
+            "${BUILD_OUTPUT_CACHE:-${HOME}/.cache/radsat-linux/buildroot-output}" \
             "${BUILD_CACHE_ROOT:-${HOME}/.cache/radsat-linux}/cargo" \
             "${BUILD_CACHE_ROOT:-${HOME}/.cache/radsat-linux}/cargo-target" \
-            "buildroot-${BUILDROOT_VERSION}/output" \
-            "buildroot-${BUILDROOT_VERSION}/output/build" \
-            "buildroot-${BUILDROOT_VERSION}/output/target" \
-            "buildroot-${BUILDROOT_VERSION}/output/images"; do
+            "${BUILD_OUTPUT_CACHE:-${HOME}/.cache/radsat-linux/buildroot-output}/build" \
+            "${BUILD_OUTPUT_CACHE:-${HOME}/.cache/radsat-linux/buildroot-output}/target" \
+            "${BUILD_OUTPUT_CACHE:-${HOME}/.cache/radsat-linux/buildroot-output}/images"; do
             if [[ -e "${path}" ]]; then
               du -sh "${path}"
             fi
@@ -233,7 +268,7 @@ jobs:
         run: |
           rm -rf artifacts
           mkdir -p artifacts
-          output_dir="buildroot-${BUILDROOT_VERSION}/output"
+          output_dir="${BUILD_OUTPUT_CACHE}"
           image_dir="${output_dir}/images"
           cp --link \
             "${image_dir}/kubos-linux.tar.gz" \
