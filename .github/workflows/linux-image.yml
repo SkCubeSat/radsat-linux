@@ -28,7 +28,7 @@ env:
   BUILDROOT_VERSION: 2025.02.14
   BUILDROOT_SHA256: >-
     dc36c895d189d37f443d0352202ffd6a2436afcaf21570b4d9fbb177b56dee0b
-  BUILDER_IMAGE: radsat-linux-builder:buildroot-2025.02.14-rust-1.93.0
+  BUILDER_IMAGE: radsat-linux-builder:buildroot-2025.02.14-rust-1.93.0-clang
 
 jobs:
   build:

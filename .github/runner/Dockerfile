@@ -11,7 +11,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN sed -i '/xenial/d' /etc/apt/sources.list && \
     apt-get update && \
-    apt-get install --yes --no-install-recommends gcc-8 g++-8 && \
+    apt-get install --yes --no-install-recommends gcc-8 g++-8 clang llvm libclang-dev && \
     ln -sf /usr/bin/gcc-8 /usr/local/bin/cc && \
     ln -sf /usr/bin/g++-8 /usr/local/bin/c++ && \
     ln -sf /usr/bin/gcc-8 /usr/local/bin/gcc && \

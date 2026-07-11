@@ -1,0 +1,17 @@
+menuconfig BR2_PACKAGE_KUBOS_COMMS_CLI
+    bool "RADSAT Comms CLI"
+    default n
+    select BR2_PACKAGE_HAS_KUBOS_COMMS_CLI
+    help
+        Include the RADSAT comms-cli operator tool. A typed command-line
+        client for the comms-services GraphQL API (defaults to
+        http://127.0.0.1:8150/graphql, override with --url). Installed to
+        /usr/bin; it is not a daemon so no init script or monit entry is
+        created.
+
+config BR2_PACKAGE_HAS_KUBOS_COMMS_CLI
+    bool
+
+config BR2_PACKAGE_PROVIDES_KUBOS_COMMS_CLI
+    string
+    default "kubos"

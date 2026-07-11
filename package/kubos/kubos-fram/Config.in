@@ -1,0 +1,110 @@
+menuconfig BR2_PACKAGE_KUBOS_FRAM
+    bool "RADSAT FRAM Service"
+    default n
+    select BR2_PACKAGE_HAS_KUBOS_FRAM
+    help
+        Include RADSAT FRAM Service as a Kubos service.
+
+if BR2_PACKAGE_KUBOS_FRAM
+
+config BR2_KUBOS_FRAM_INIT_LVL
+    int "Service Run Level"
+    default 90
+    range 10 99
+    depends on BR2_PACKAGE_KUBOS_FRAM
+    help
+        The initialization priority level of the RADSAT FRAM Service.
+        The lower the number, the earlier the service is initialized.
+
+config BR2_KUBOS_FRAM_RESTART_COUNT
+    int "Service Restart Limit"
+    default 3
+    depends on BR2_PACKAGE_KUBOS_FRAM
+    depends on BR2_PACKAGE_MONIT
+    help
+        The maximum number of times the service should be restarted within the timeframe
+        specified by BR2_KUBOS_FRAM_RESTART_CYCLES if it goes down
+
+config BR2_KUBOS_FRAM_RESTART_CYCLES
+    int "Service Restart Limit Timeframe"
+    default 10
+    depends on BR2_PACKAGE_KUBOS_FRAM
+    depends on BR2_PACKAGE_MONIT
+    help
+        The number of Monit monitoring cycles in which the maximum number of service restarts
+        must occur before the system stops trying to recover the service.
+
+        The resulting maximum timeframe in which the restarts must occur can be calculated by
+        multiplying this number by the length of a single Monit sleep cycle (60 seconds)
+
+config BR2_KUBOS_FRAM_IP
+    string "Service IP Address"
+    default "0.0.0.0"
+    depends on BR2_PACKAGE_KUBOS_FRAM
+    help
+        The IP address which the service should use to receive GraphQL requests
+
+config BR2_KUBOS_FRAM_PORT
+    int "Service Port"
+    default 8091
+    depends on BR2_PACKAGE_KUBOS_FRAM
+    help
+        The port which the service should use to receive GraphQL requests
+
+config BR2_KUBOS_FRAM_I2C_BUS
+    string "I2C Bus"
+    default "/dev/i2c-2"
+    depends on BR2_PACKAGE_KUBOS_FRAM
+    help
+        Linux I2C bus connected to the FRAM.
+
+config BR2_KUBOS_FRAM_I2C_ADDR
+    string "I2C Address"
+    default "0x50"
+    depends on BR2_PACKAGE_KUBOS_FRAM
+    help
+        Linux 7-bit I2C address for the FRAM, formatted as a hex string.
+
+config BR2_KUBOS_FRAM_CAPACITY_BYTES
+    int "Capacity Bytes"
+    default 8192
+    depends on BR2_PACKAGE_KUBOS_FRAM
+    help
+        FRAM capacity in bytes.
+
+config BR2_KUBOS_FRAM_ADDRESS_WIDTH_BYTES
+    int "Address Width Bytes"
+    default 2
+    depends on BR2_PACKAGE_KUBOS_FRAM
+    help
+        Number of memory address bytes used by the FRAM.
+
+config BR2_KUBOS_FRAM_MAX_TRANSFER_BYTES
+    int "Max Transfer Bytes"
+    default 32
+    depends on BR2_PACKAGE_KUBOS_FRAM
+    help
+        Maximum I2C payload bytes per transfer.
+
+config BR2_KUBOS_FRAM_FW_PRINTENV
+    string "fw_printenv Path"
+    default "/usr/sbin/fw_printenv"
+    depends on BR2_PACKAGE_KUBOS_FRAM
+    help
+        Path to the U-Boot fw_printenv utility.
+
+config BR2_KUBOS_FRAM_FW_SETENV
+    string "fw_setenv Path"
+    default "/usr/sbin/fw_setenv"
+    depends on BR2_PACKAGE_KUBOS_FRAM
+    help
+        Path to the U-Boot fw_setenv utility.
+
+endif
+
+config BR2_PACKAGE_HAS_KUBOS_FRAM
+    bool
+
+config BR2_PACKAGE_PROVIDES_KUBOS_FRAM
+    string
+    default "kubos"
