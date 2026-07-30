@@ -267,6 +267,15 @@ jobs:
 
           du -sh /var/lib/docker 2>/dev/null || true
 
+      - name: Audit packaged Kubos services
+        continue-on-error: true
+        run: |
+          report="${BUILD_OUTPUT_CACHE}/images/service-packaging-audit.md"
+          radsat-linux/tools/audit-service-packaging.sh \
+            "${BUILD_OUTPUT_CACHE}/target" \
+            "${report}"
+          cat "${report}" >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Collect build artifacts
         env:
           SOFTWARE_TAG: ${{ steps.software-version.outputs.software_tag }}
@@ -360,6 +369,12 @@ jobs:
               zImage \
               > SHA256SUMS
           )
+
+          if [[ -f "${image_dir}/service-packaging-audit.md" ]]; then
+            cp --link \
+              "${image_dir}/service-packaging-audit.md" \
+              artifacts/
+          fi
 
       - name: Upload Linux image
         uses: actions/upload-artifact@v7

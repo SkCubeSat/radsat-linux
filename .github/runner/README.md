@@ -41,3 +41,16 @@ rm -rf ~/.cache/radsat-linux
 
 The manual workflow form also has a `reset_build_cache` checkbox. Use it after
 changing the Buildroot compiler or toolchain configuration.
+
+## Advisory service packaging audit
+
+After a successful image build, the workflow audits the generated target
+filesystem for relationships between Kubos service binaries, SysV init
+scripts, PID files, and Monit configurations. It also checks the reverse
+relationships so orphaned Monit configurations and missing init scripts are
+reported.
+
+Findings are emitted as GitHub Actions warnings and written to
+`service-packaging-audit.md` in the uploaded image artifact. The audit step is
+advisory (`continue-on-error: true`), so warnings or an audit-tool failure do
+not prevent collection or upload of a successfully built image.
