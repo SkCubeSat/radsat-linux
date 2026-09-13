@@ -31,6 +31,10 @@ mkdir -p "${TARGET_DIR}/microsd"
 
 cd "${CURR_DIR}"
 
+# Seed the U-Boot environment file for fw_printenv/fw_setenv.
+# Size must match CONFIG_ENV_SIZE (0x2800 = 10240 bytes).
+dd if=/dev/zero of="${TARGET_DIR}/envar/uboot.env" bs=1 count=10240 2>/dev/null
+
 # Generate the images
 genimage \
     --rootpath "${TARGET_DIR}" \
@@ -48,6 +52,7 @@ tar -czf "${BINARIES_DIR}/aux-sd.tar.gz" \
 # Clean up
 find "${TARGET_DIR}/upgrade" -mindepth 1 -maxdepth 1 -delete
 rmdir "${TARGET_DIR}/microsd"
+rm -f "${TARGET_DIR}/envar/uboot.env"
 
 # Removing these just to free up disk space...
 rm -f "${BINARIES_DIR}/user"

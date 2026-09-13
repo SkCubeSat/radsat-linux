@@ -1,0 +1,36 @@
+#!/bin/sh
+#
+# S02uboot-env — Early boot setup for U-Boot environment tools.
+#
+# Ensures /run/lock exists (needed by fw_printenv/fw_setenv lock file)
+# and seeds /envar/uboot.env if it is missing.
+#
+# Must run before S99kubos-verify which calls fw_setenv.
+#
+
+ENVAR_FILE="/envar/uboot.env"
+ENVAR_SIZE=10240   # 0x2800 — must match fw_env.config / CONFIG_ENV_SIZE
+
+case "$1" in
+  start)
+    # Ensure the lock directory exists for fw_printenv/fw_setenv
+    # (/var/lock is a symlink to ../run/lock on this system)
+    mkdir -p /run/lock
+    chmod 1777 /run/lock
+
+    # Seed the U-Boot environment file if missing or empty
+    if [ ! -s "${ENVAR_FILE}" ]; then
+        echo "S02uboot-env: creating ${ENVAR_FILE} (${ENVAR_SIZE} bytes)"
+        dd if=/dev/zero of="${ENVAR_FILE}" bs=1 count=${ENVAR_SIZE} 2>/dev/null
+        sync
+    fi
+    ;;
+  stop)
+    ;;
+  *)
+    echo "Usage: $0 {start|stop}"
+    exit 1
+    ;;
+esac
+
+exit 0

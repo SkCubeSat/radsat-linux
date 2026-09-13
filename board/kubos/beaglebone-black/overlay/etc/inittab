@@ -30,6 +30,9 @@
 # Mount up partitions with data
 ::sysinit:/bin/mount -o remount,rw /
 ::sysinit:/bin/mount -a
+# Create /run/lock for fw_printenv/fw_setenv lock file (/var/lock -> ../run/lock)
+::sysinit:/bin/mkdir -p /run/lock
+::sysinit:/bin/chmod 1777 /run/lock
 # Mount the Kubos directories which use partuuid
 ::sysinit:/bin/mount /home
 ::sysinit:/bin/mount /home/microsd
