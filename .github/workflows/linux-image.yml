@@ -62,6 +62,8 @@ jobs:
         with:
           path: radsat-linux
           fetch-depth: 0
+          clean: true
+          token: ${{ secrets.CI_CHECKOUT_TOKEN }}
 
       - name: Resolve Software release tag
         id: software-version
