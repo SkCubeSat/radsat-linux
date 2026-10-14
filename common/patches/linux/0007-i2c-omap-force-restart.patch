@@ -1,0 +1,186 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Tue, 13 Oct 2026 23:15:00 -0600
+Subject: [PATCH] i2c: omap: drop slave mode before the AM33xx reset
+
+The warm reset waits until every I2C controller goes idle. A controller
+left in slave mode never does, and that request clears the watchdog, so
+the board sits until power is pulled. Turn every probed controller off
+with IRQs already disabled, gate the I2C1 and I2C2 clocks without
+waiting, then request the same warm reset the previous image used.
+Arm WDT1 before that, and do not let device_shutdown() clear a timer
+userspace armed for this reboot.
+
+diff --git a/arch/arm/mach-omap2/am33xx-restart.c b/arch/arm/mach-omap2/am33xx-restart.c
+index abcd123..abcd124 100644
+--- a/arch/arm/mach-omap2/am33xx-restart.c
++++ b/arch/arm/mach-omap2/am33xx-restart.c
+@@ -103,20 +103,49 @@
+ 	wdt_wait(base, WWPS_WSPR);
+ }
+ 
++/*
++ * i2c-omap provides the real one. Empty when that driver is not built in,
++ * so a board without CONFIG_I2C_OMAP still links.
++ */
++void __weak omap_i2c_quiesce_for_restart(void)
++{
++}
++
++/*
++ * Do not poll IDLEST. The caller already disabled the I2C module.
++ * Waiting here for idle is the hang this reset is leaving behind.
++ */
++static void am33xx_i2c_clocks_off(void)
++{
++	void __iomem *clkctrl[] = {
++		AM33XX_CM_PER_I2C1_CLKCTRL,
++		AM33XX_CM_PER_I2C2_CLKCTRL,
++	};
++	int i;
++	u32 val;
++
++	for (i = 0; i < ARRAY_SIZE(clkctrl); i++) {
++		val = readl_relaxed(clkctrl[i]);
++		val &= ~AM33XX_MODULEMODE_MASK;
++		writel_relaxed(val, clkctrl[i]);
++	}
++}
++
+ /**
+  * am33xx_restart - trigger a software restart of the SoC
+  * @mode: the "reboot mode", see arch/arm/kernel/{setup,process}.c
+  * @cmd: passed from the userspace program rebooting the system (if provided)
+  *
+- * Warm reset does not finish when a peripheral refuses the PRCM
+- * handshake, and device_shutdown() has already stopped the watchdog
+- * driver and gated its clock. Arm WDT1 for one second through the
+- * static map, then request the warm reset. omap_prm_reset_system()
+- * does not return. If that reset hangs, the watchdog resets the chip.
++ * Arm WDT1 first, then turn the I2C controllers off and drop the I2C1
++ * and I2C2 clocks without waiting. The warm reset does not finish
++ * while a slave controller is still listening, and requesting it
++ * clears the watchdog. omap_prm_reset_system() does not return.
+  */
+ void am33xx_restart(enum reboot_mode mode, const char *cmd)
+ {
+ 	am33xx_arm_wdt();
+-	pr_emerg("am33xx: warm reset\n");
++	omap_i2c_quiesce_for_restart();
++	am33xx_i2c_clocks_off();
++	pr_emerg("am33xx: forcing warm reset\n");
+ 	omap_prm_reset_system();
+ }
+diff --git a/drivers/i2c/busses/i2c-omap.c b/drivers/i2c/busses/i2c-omap.c
+index abcd123..abcd124 100644
+--- a/drivers/i2c/busses/i2c-omap.c
++++ b/drivers/i2c/busses/i2c-omap.c
+@@ -1863,6 +1863,76 @@
+ 	.recover_bus		= i2c_generic_scl_recovery,
+ };
+ 
++/*
++ * am33xx_restart() calls this with IRQs already off. The warm reset
++ * waits until every I2C controller goes idle, and a controller left in
++ * slave mode never does. That request also clears the watchdog.
++ * Mask interrupts, soft-reset, and leave the module disabled. No
++ * sleeping and no runtime-PM get: a suspended controller has its
++ * clock off, and a register read there can stall the interconnect.
++ */
++#define OMAP_I2C_RESTART_MAX	4
++
++static struct omap_i2c_dev *omap_i2c_restart_devs[OMAP_I2C_RESTART_MAX];
++static int omap_i2c_restart_nr;
++
++static void omap_i2c_quiesce_one(struct omap_i2c_dev *omap)
++{
++	unsigned int spins = 1000;
++
++	if (!omap->base || !omap->regs)
++		return;
++	if (pm_runtime_status_suspended(omap->dev))
++		return;
++
++	if (omap->scheme == OMAP_I2C_SCHEME_0)
++		omap_i2c_write_reg(omap, OMAP_I2C_IE_REG, 0);
++	else
++		omap_i2c_write_reg(omap, OMAP_I2C_IP_V2_IRQENABLE_CLR,
++				   OMAP_I2C_IP_V2_INTERRUPTS_MASK);
++
++	omap_i2c_write_reg(omap, OMAP_I2C_CON_REG, 0);
++	if (omap->rev < OMAP_I2C_OMAP1_REV_2)
++		return;
++
++	omap_i2c_write_reg(omap, OMAP_I2C_SYSC_REG, SYSC_SOFTRESET_MASK);
++	/* RESETDONE is sampled only while the module enable bit is set. */
++	omap_i2c_write_reg(omap, OMAP_I2C_CON_REG, OMAP_I2C_CON_EN);
++	while (spins-- &&
++	       !(omap_i2c_read_reg(omap, OMAP_I2C_SYSS_REG) &
++		 SYSS_RESETDONE_MASK))
++		udelay(1);
++	omap_i2c_write_reg(omap, OMAP_I2C_CON_REG, 0);
++}
++
++void omap_i2c_quiesce_for_restart(void)
++{
++	int i;
++
++	for (i = 0; i < omap_i2c_restart_nr; i++)
++		omap_i2c_quiesce_one(omap_i2c_restart_devs[i]);
++}
++
++static void omap_i2c_restart_add(struct omap_i2c_dev *omap)
++{
++	if (omap_i2c_restart_nr < OMAP_I2C_RESTART_MAX)
++		omap_i2c_restart_devs[omap_i2c_restart_nr++] = omap;
++}
++
++static void omap_i2c_restart_del(struct omap_i2c_dev *omap)
++{
++	int i;
++
++	for (i = 0; i < omap_i2c_restart_nr; i++) {
++		if (omap_i2c_restart_devs[i] != omap)
++			continue;
++		omap_i2c_restart_devs[i] =
++			omap_i2c_restart_devs[--omap_i2c_restart_nr];
++		omap_i2c_restart_devs[omap_i2c_restart_nr] = NULL;
++		break;
++	}
++}
++
+ static int
+ omap_i2c_probe(struct platform_device *pdev)
+ {
+@@ -2026,6 +2096,7 @@
+ 		 major, minor, omap->speed);
+ 
+ 	pm_runtime_mark_last_busy(omap->dev);
++	omap_i2c_restart_add(omap);
+ 	pm_runtime_put_autosuspend(omap->dev);
+ 
+ 	return 0;
+@@ -2044,6 +2115,7 @@
+ 	struct omap_i2c_dev	*omap = platform_get_drvdata(pdev);
+ 	int ret;
+ 
++	omap_i2c_restart_del(omap);
+ 	i2c_del_adapter(&omap->adapter);
+ 	ret = pm_runtime_get_sync(&pdev->dev);
+ 	if (ret < 0)
+diff --git a/drivers/watchdog/omap_wdt.c b/drivers/watchdog/omap_wdt.c
+index abcd123..abcd124 100644
+--- a/drivers/watchdog/omap_wdt.c
++++ b/drivers/watchdog/omap_wdt.c
+@@ -295,6 +295,11 @@
+ {
+ 	struct omap_wdt_dev *wdev = platform_get_drvdata(pdev);
+ 
++	/* Userspace armed this timer before reboot. Clearing it here is
++	 * what lets a stuck peripheral sit forever.
++	 */
++	if (system_state == SYSTEM_RESTART)
++		return;
+ 	mutex_lock(&wdev->lock);
+ 	if (wdev->omap_wdt_users) {
+ 		omap_wdt_disable(wdev);

@@ -1,14 +1,13 @@
 #!/bin/sh
 #
-# Hardened reboot. Replaces the busybox symlink.
+# Force reboot. Replaces the busybox symlink.
 #
-# The AM335x warm reset can hang after shutdown has turned the
-# watchdog off, and umount can hang before the reboot syscall. Arm
-# the hardware watchdog, bound the filesystem flush, then force the
-# syscall so inittab cannot block in rcK.
+# Arm the hardware watchdog, bound the filesystem flush, then force
+# the reboot syscall. The kernel turns the I2C controllers off and
+# requests the warm reset. inittab cannot sit in rcK on this path.
 #
 
-echo "reboot: hardened reboot" > /dev/console 2>/dev/null
+echo "reboot: forcing reset" > /dev/console 2>/dev/null
 
 if [ -x /sbin/flush-filesystems ]; then
     /sbin/flush-filesystems

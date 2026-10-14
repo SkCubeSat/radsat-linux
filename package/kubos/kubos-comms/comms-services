@@ -9,28 +9,30 @@ max_num_handlers = 50
 downlink_ports = [14011]
 
 [comms-services.csp]
-obc_node = 8
+obc_node = 9
 uplink_packet_csp_port = 10
 uplink_sfp_csp_port = 12
-ground_node = 2
+ground_node = 26
 ground_packet_csp_port = 11
 ground_sfp_csp_port = 13
 uplink_crypto = "none"
-sfp_mtu = 240
-sfp_read_timeout_ms = 10000
+sfp_mtu = 230
 sfp_use_rdp = true
 sfp_max_space_packet_bytes = 65541
 max_frame_bytes = 260
+downlink_radio_ready_timeout_ms = 12000
+downlink_attempt_timeout_ms = 15000
 
 [comms-services.radios.uplink]
-bus = "/dev/i2c-1"
-csp_node = 15
-i2c_addr = 15
-slave_rx_device = "/dev/i2c-slave-frameq-1-08"
+bus = "/dev/i2c-2"
+csp_node = 14
+i2c_addr = 14
+slave_rx_device = "/dev/i2c-slave-frameq-2-09"
 command_timeout_ms = 1000
 
 [comms-services.radios.downlink]
 bus = "/dev/i2c-2"
-csp_node = 9
-i2c_addr = 9
+csp_node = 15
+i2c_addr = 15
+slave_rx_device = "/dev/i2c-slave-frameq-2-09"
 command_timeout_ms = 1000
