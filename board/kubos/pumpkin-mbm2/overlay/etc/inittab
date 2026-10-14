@@ -48,7 +48,6 @@ ttyS0::respawn:/sbin/getty -L  ttyS0 115200 vt100 # GENERIC_SERIAL
 # Stuff to do for the 3-finger salute
 #::ctrlaltdel:/sbin/reboot
 
-# Stuff to do before rebooting
-::shutdown:/etc/init.d/rcK
-::shutdown:/sbin/swapoff -a
-::shutdown:/bin/umount -a -r
+# Stuff to do before rebooting. One bounded script: rcK or umount
+# must not be able to sit forever and skip the reboot syscall.
+::shutdown:/sbin/flush-filesystems

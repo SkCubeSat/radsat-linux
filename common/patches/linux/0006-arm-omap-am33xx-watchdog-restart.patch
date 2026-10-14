@@ -1,0 +1,143 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Tue, 13 Oct 2026 18:40:00 -0600
+Subject: [PATCH] ARM: OMAP2+: arm WDT1 before the AM33xx warm reset
+
+omap_prm_reset_system() writes the warm-reset bit and then spins.
+That reset does not complete when a peripheral will not handshake,
+and by then device_shutdown() has stopped omap_wdt and gated its
+clock, so nothing finishes the reboot. machine_restart() has already
+disabled IRQs, so arm WDT1 through the static L4 map (one second,
+the same sequence as omap_wdt_start) and then request the warm
+reset. Every poll is bounded. If the warm reset hangs, the watchdog
+resets the chip.
+
+---
+diff --git a/arch/arm/mach-omap2/am33xx-restart.c b/arch/arm/mach-omap2/am33xx-restart.c
+index 0000000..0000001 100644
+--- a/arch/arm/mach-omap2/am33xx-restart.c
++++ b/arch/arm/mach-omap2/am33xx-restart.c
+@@ -5,23 +5,118 @@
+  * it under the terms of the GNU General Public License version 2 as
+  * published by the Free Software Foundation.
+  */
++#include <linux/io.h>
+ #include <linux/kernel.h>
+ #include <linux/reboot.h>
+ 
++#include "cm33xx.h"
+ #include "common.h"
++#include "iomap.h"
+ #include "prm.h"
+ 
++/*
++ * DT node wdt2 / hwmod wd_timer2. This is the TRM WDT1 instance at
++ * 0x44E35000, clocked by CM_WKUP_WDT1_CLKCTRL.
++ */
++#define AM33XX_WDT_BASE			0x44e35000
++
++#define WDT_WCLR			0x24
++#define WDT_WLDR			0x2c
++#define WDT_WTGR			0x30
++#define WDT_WWPS			0x34
++#define WDT_WSPR			0x48
++
++#define WWPS_WCLR			0x01
++#define WWPS_WLDR			0x04
++#define WWPS_WTGR			0x08
++#define WWPS_WSPR			0x10
++
++/* drivers/watchdog/omap_wdt.c GET_WLDR_VAL(1), PTV = 0. */
++#define WDT_LOAD_1S			(0xffffffffu - 32768u + 1u)
++#define WDT_POLL_SPINS			100000u
++
++static void wdt_wait(void __iomem *base, u32 pend)
++{
++	unsigned int spins = WDT_POLL_SPINS;
++
++	while (spins-- && (readl_relaxed(base + WDT_WWPS) & pend))
++		cpu_relax();
++}
++
++/*
++ * machine_restart() has already disabled IRQs. ioremap() can take a
++ * mutex, so the watchdog and its CLKCTRL are reached through the
++ * static L4 wakeup map. Returns 0 when the module clock does not
++ * come up: touching the watchdog with that clock off can stall the
++ * interconnect, and every poll here is bounded so we still fall
++ * through to the warm reset.
++ */
++static int am33xx_wdt_clock_on(void)
++{
++	void __iomem *clkctrl = AM33XX_CM_WKUP_WDT1_CLKCTRL;
++	unsigned int spins = WDT_POLL_SPINS;
++	u32 val;
++
++	val = readl_relaxed(clkctrl);
++	val &= ~AM33XX_MODULEMODE_MASK;
++	val |= 0x2;
++	writel_relaxed(val, clkctrl);
++
++	while (spins--) {
++		if (!(readl_relaxed(clkctrl) & AM33XX_IDLEST_MASK))
++			return 1;
++		cpu_relax();
++	}
++	return 0;
++}
++
++/* omap_wdt_start() sequence. Every posted-write wait is bounded. */
++static void am33xx_arm_wdt(void)
++{
++	void __iomem *base = AM33XX_L4_WK_IO_ADDRESS(AM33XX_WDT_BASE);
++
++	if (!am33xx_wdt_clock_on()) {
++		pr_emerg("am33xx: WDT1 clock did not start\n");
++		return;
++	}
++
++	writel_relaxed(0xaaaa, base + WDT_WSPR);
++	wdt_wait(base, WWPS_WSPR);
++	writel_relaxed(0x5555, base + WDT_WSPR);
++	wdt_wait(base, WWPS_WSPR);
++
++	wdt_wait(base, WWPS_WCLR);
++	writel_relaxed((1 << 5) | (0 << 2), base + WDT_WCLR);
++	wdt_wait(base, WWPS_WCLR);
++
++	wdt_wait(base, WWPS_WLDR);
++	writel_relaxed(WDT_LOAD_1S, base + WDT_WLDR);
++	wdt_wait(base, WWPS_WLDR);
++
++	wdt_wait(base, WWPS_WTGR);
++	writel_relaxed(~0x1234u, base + WDT_WTGR);
++	wdt_wait(base, WWPS_WTGR);
++
++	writel_relaxed(0xbbbb, base + WDT_WSPR);
++	wdt_wait(base, WWPS_WSPR);
++	writel_relaxed(0x4444, base + WDT_WSPR);
++	wdt_wait(base, WWPS_WSPR);
++}
++
+ /**
+- * am3xx_restart - trigger a software restart of the SoC
++ * am33xx_restart - trigger a software restart of the SoC
+  * @mode: the "reboot mode", see arch/arm/kernel/{setup,process}.c
+  * @cmd: passed from the userspace program rebooting the system (if provided)
+  *
+- * Resets the SoC.  For @cmd, see the 'reboot' syscall in
+- * kernel/sys.c.  No return value.
++ * Warm reset does not finish when a peripheral refuses the PRCM
++ * handshake, and device_shutdown() has already stopped the watchdog
++ * driver and gated its clock. Arm WDT1 for one second through the
++ * static map, then request the warm reset. omap_prm_reset_system()
++ * does not return. If that reset hangs, the watchdog resets the chip.
+  */
+ void am33xx_restart(enum reboot_mode mode, const char *cmd)
+ {
+-	/* TODO: Handle mode and cmd if necessary */
+-
++	am33xx_arm_wdt();
++	pr_emerg("am33xx: warm reset\n");
+ 	omap_prm_reset_system();
+ }

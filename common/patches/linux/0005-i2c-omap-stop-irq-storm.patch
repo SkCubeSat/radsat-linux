@@ -1,0 +1,415 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Tue, 13 Oct 2026 17:40:00 -0600
+Subject: [PATCH] i2c: omap: drop a stuck IRQ before the oneshot thread returns
+
+The 4.4 threaded handler is oneshot. irq_finalize_oneshot unmasks the
+level line when omap_i2c_isr_thread returns. The master loop used to
+ignore the other direction's XRDY/RRDY without acking it, and any
+other enabled status bit the handler did not consume stayed set. On
+the single AM335x core that re-arms irq/162-4819c00 until the NMI
+watchdog reports a soft lockup and nothing else is scheduled.
+
+Ack every interrupt status bit the thread can see. If the opposite
+direction's ready bit does not clear, mask that source. If the same
+bit is still pending across repeated returns, or the handler hits its
+iteration cap without moving a byte, mask what is left, soft-reset
+without sleeping, and put a registered slave back into listen mode.
+
+---
+diff --git a/drivers/i2c/busses/i2c-omap.c b/drivers/i2c/busses/i2c-omap.c
+index 98ae963..4c20c69 100644
+--- a/drivers/i2c/busses/i2c-omap.c
++++ b/drivers/i2c/busses/i2c-omap.c
+@@ -26,6 +26,7 @@
+ 
+ #include <linux/module.h>
+ #include <linux/delay.h>
++#include <linux/ratelimit.h>
+ #include <linux/i2c.h>
+ #include <linux/err.h>
+ #include <linux/interrupt.h>
+@@ -189,6 +190,20 @@ enum {
+ 
+ #define OMAP_I2C_IP_V2_INTERRUPTS_MASK	0x6FFF
+ 
++/*
++ * Status bits that can assert the level IRQ. BB is bus state, not an
++ * interrupt, and acking it would lie about whether the bus is busy.
++ * Bits 7:5 are AERR, STC and GC. They have no named helpers here, but
++ * they are still W1C sources on the v2 IRQSTATUS register.
++ */
++#define OMAP_I2C_STAT_IRQ_MASK		\
++	(OMAP_I2C_IP_V2_INTERRUPTS_MASK & ~OMAP_I2C_STAT_BB)
++
++/* One invocation. A stuck bit must be masked before this is exceeded. */
++#define OMAP_I2C_ISR_LIMIT		100
++/* Returns in a row with the same status bit still latched. */
++#define OMAP_I2C_STALL_LIMIT		8
++
+ /* Slave ISR doesn't support rev1 IP. */
+ #define OMAP_I2C_SLAVE_ENABLED		(IS_ENABLED(CONFIG_I2C_SLAVE) && \
+ 					!IS_ENABLED(CONFIG_ARCH_OMAP15XX))
+@@ -230,6 +245,15 @@ struct omap_i2c_dev {
+ 	u16			syscstate;
+ 	u16			westate;
+ 	u16			errata;
++	/*
++	 * Consecutive returns that still showed an enabled status bit
++	 * which was already set on entry. OMAP_I2C_STALL_LIMIT in a
++	 * row means the line never dropped. A busy bus clears the
++	 * bit between bytes.
++	 */
++	u16			irq_stall_stat;
++	u8			irq_stall;
++	u8			irq_progress;
+ #if OMAP_I2C_SLAVE_ENABLED
+ 	struct i2c_client	*slave;
+ 	unsigned		aas:1;		/* addressed as slave */
+@@ -1118,6 +1142,7 @@ static void omap_i2c_slave_write_received(struct omap_i2c_dev *omap,
+ 		}
+ 
+ 		value = omap_i2c_read_reg(omap, OMAP_I2C_DATA_REG);
++		omap->irq_progress = 1;
+ 		i2c_slave_event(omap->slave, I2C_SLAVE_WRITE_RECEIVED,
+ 				&value);
+ 	}
+@@ -1136,15 +1161,18 @@ static void omap_i2c_slave_read_processed(struct omap_i2c_dev *omap)
+ 				&value);
+ 	}
+ 
++	omap->irq_progress = 1;
+ 	omap_i2c_write_reg(omap, OMAP_I2C_DATA_REG, value);
+ }
+ 
+-static void omap_i2c_slave_event(struct omap_i2c_dev *omap)
++/* Returns 1 when this invocation spun without moving a byte. */
++static int omap_i2c_slave_event(struct omap_i2c_dev *omap)
+ {
+ 	u16 bits;
+ 	u16 stat;
+ 	u8 value = 0;
+ 	int count = 0;
++	int gave_up = 0;
+ 
+ 	do {
+ 		bits = omap_i2c_read_reg(omap, OMAP_I2C_IE_REG);
+@@ -1155,10 +1183,20 @@ static void omap_i2c_slave_event(struct omap_i2c_dev *omap)
+ 			break;
+ 
+ 		dev_dbg(omap->dev, "Slave IRQ (ISR = 0x%04x)\n", stat);
+-		if (count++ == 100) {
+-			dev_warn(omap->dev, "Too much slave work in one IRQ\n");
++		if (count >= OMAP_I2C_ISR_LIMIT) {
++			dev_err_ratelimited(omap->dev,
++				"Too much slave work in one IRQ (stat=0x%04x)\n",
++				stat);
++			/*
++			 * Leave the current bit set when bytes were moving so
++			 * the next entry can take them. No progress means the
++			 * same source is spinning; the epilogue has to mask it.
++			 */
++			if (!omap->irq_progress)
++				gave_up = 1;
+ 			break;
+ 		}
++		count++;
+ 
+ 		if (stat & OMAP_I2C_STAT_AAS) {
+ 			omap->idle = 1;
+@@ -1225,7 +1263,16 @@ static void omap_i2c_slave_event(struct omap_i2c_dev *omap)
+ 			omap_i2c_ack_stat(omap, OMAP_I2C_STAT_XUDF);
+ 			continue;
+ 		}
++
++		/*
++		 * AL, AERR, STC, GC, or anything else this pass did not consume.
++		 * Ack it. If the bit stays set, the loop hits OMAP_I2C_ISR_LIMIT
++		 * and the thread epilogue masks it.
++		 */
++		omap_i2c_ack_stat(omap, stat & OMAP_I2C_STAT_IRQ_MASK);
+ 	} while (stat);
++
++	return gave_up;
+ }
+ 
+ static int omap_i2c_reg_slave(struct i2c_client *slave)
+@@ -1337,19 +1384,148 @@ omap_i2c_isr(int irq, void *dev_id)
+ 	return ret;
+ }
+ 
++static u16 omap_i2c_pending_irq(struct omap_i2c_dev *omap)
++{
++	return omap_i2c_read_reg(omap, OMAP_I2C_STAT_REG) &
++	       omap_i2c_read_reg(omap, OMAP_I2C_IE_REG) &
++	       OMAP_I2C_STAT_IRQ_MASK;
++}
++
++static void omap_i2c_mask_irq_sources(struct omap_i2c_dev *omap, u16 mask)
++{
++	if (!mask)
++		return;
++
++	if (omap->scheme == 0) {
++		u16 ie = omap_i2c_read_reg(omap, OMAP_I2C_IE_REG);
++
++		omap_i2c_write_reg(omap, OMAP_I2C_IE_REG, ie & ~mask);
++	} else {
++		omap_i2c_write_reg(omap, OMAP_I2C_IP_V2_IRQENABLE_CLR, mask);
++	}
++
++	/* writew_relaxed is posted. Read back before the line is unmasked. */
++	omap_i2c_read_reg(omap, OMAP_I2C_STAT_REG);
++}
++
++/*
++ * omap_i2c_reset() sleeps. This runs from the threaded IRQ with the
++ * driver lock held, so poll RESETDONE instead.
++ */
++static int omap_i2c_reset_nosleep(struct omap_i2c_dev *omap)
++{
++	u16 sysc;
++	unsigned int spins = 1000;
++
++	if (omap->rev < OMAP_I2C_OMAP1_REV_2)
++		return 0;
++
++	sysc = omap_i2c_read_reg(omap, OMAP_I2C_SYSC_REG);
++	omap_i2c_write_reg(omap, OMAP_I2C_CON_REG,
++			   omap_i2c_read_reg(omap, OMAP_I2C_CON_REG) &
++			   ~OMAP_I2C_CON_EN);
++	omap_i2c_write_reg(omap, OMAP_I2C_SYSC_REG, SYSC_SOFTRESET_MASK);
++	/*
++	 * EN has to be set before RESETDONE becomes 1.
++	 */
++	omap_i2c_write_reg(omap, OMAP_I2C_CON_REG, OMAP_I2C_CON_EN);
++	while (!(omap_i2c_read_reg(omap, OMAP_I2C_SYSS_REG) &
++		 SYSS_RESETDONE_MASK)) {
++		if (!spins--) {
++			dev_warn(omap->dev,
++				 "timeout waiting for controller reset\n");
++			return -ETIMEDOUT;
++		}
++		udelay(1);
++	}
++
++	omap_i2c_write_reg(omap, OMAP_I2C_SYSC_REG, sysc);
++	if (omap->rev > OMAP_I2C_REV_ON_3430_3530)
++		omap->bb_valid = 0;
++
++	return 0;
++}
++
++/*
++ * irq_finalize_oneshot unmasks this level IRQ when the thread returns.
++ * force is set when this invocation gave up, or the same status
++ * has survived OMAP_I2C_STALL_LIMIT returns. A new byte is left
++ * pending so the thread can run again. A bit that survived is
++ * masked, the block is reset, and a slave returns to listen mode.
++ * Returns 1 when the current transfer was abandoned.
++ */
++static int omap_i2c_quiesce_irq(struct omap_i2c_dev *omap, int force)
++{
++	u16 pending = omap_i2c_pending_irq(omap);
++
++	if (!pending || !force)
++		return 0;
++
++	dev_err_ratelimited(omap->dev,
++			    "I2C IRQ stuck (0x%04x), recovering controller\n",
++			    pending);
++	omap_i2c_mask_irq_sources(omap, pending);
++	omap_i2c_ack_stat(omap, pending);
++
++	omap_i2c_reset_nosleep(omap);
++	__omap_i2c_init(omap);
++#if OMAP_I2C_SLAVE_ENABLED
++	if (omap->slave) {
++		omap->aas = 0;
++		omap_i2c_listen_slave(omap);
++	}
++#endif
++
++	pending = omap_i2c_pending_irq(omap);
++	if (pending) {
++		dev_err_ratelimited(omap->dev,
++				    "I2C IRQ 0x%04x survived reset, leaving it masked\n",
++				    pending);
++		omap_i2c_mask_irq_sources(omap, pending);
++		omap_i2c_ack_stat(omap, pending);
++	}
++
++	omap->irq_stall = 0;
++	omap->irq_stall_stat = 0;
++	omap->irq_progress = 0;
++	return 1;
++}
++
++/* Re-enable sources saved on entry whose status flag is actually clear. */
++static void omap_i2c_restore_saved_irqs(struct omap_i2c_dev *omap, u16 saved)
++{
++	u16 stat = omap_i2c_read_reg(omap, OMAP_I2C_STAT_REG);
++	u16 want = saved & ~stat & OMAP_I2C_STAT_IRQ_MASK;
++
++	if (!want)
++		return;
++
++	if (omap->scheme == 0) {
++		u16 ie = omap_i2c_read_reg(omap, OMAP_I2C_IE_REG);
++
++		omap_i2c_write_reg(omap, OMAP_I2C_IE_REG, ie | want);
++	} else {
++		omap_i2c_write_reg(omap, OMAP_I2C_IP_V2_IRQENABLE_SET, want);
++	}
++	omap_i2c_read_reg(omap, OMAP_I2C_IE_REG);
++}
++
+ static irqreturn_t
+ omap_i2c_isr_thread(int this_irq, void *dev_id)
+ {
+ 	struct omap_i2c_dev *omap = dev_id;
+ 	unsigned long flags;
+ 	u16 bits;
+-	u16 stat;
+-	int err = 0, count = 0;
++	u16 stat, ignored, saved_ie, entry_pending, exit_pending;
++	int err = 0, count = 0, completed = 0, gave_up = 0;
+ 
+ 	spin_lock_irqsave(&omap->lock, flags);
++	omap->irq_progress = 0;
++	saved_ie = omap_i2c_read_reg(omap, OMAP_I2C_IE_REG);
++	entry_pending = omap_i2c_pending_irq(omap);
+ #if OMAP_I2C_SLAVE_ENABLED
+ 	if (omap->aas) {
+-		omap_i2c_slave_event(omap);
++		gave_up = omap_i2c_slave_event(omap);
+ 		goto out;
+ 	}
+ #endif
+@@ -1358,11 +1534,22 @@ omap_i2c_isr_thread(int this_irq, void *dev_id)
+ 		stat = omap_i2c_read_reg(omap, OMAP_I2C_STAT_REG);
+ 		stat &= bits;
+ 
+-		/* If we're in receiver mode, ignore XDR/XRDY */
++		/*
++		 * Data-ready for the other direction is not this transfer, but
++		 * the enable bit is still on. Dropping it from the local copy
++		 * without acking it leaves the level line high. The oneshot
++		 * thread then re-enters until the NMI watchdog fires.
++		 */
+ 		if (omap->receiver)
+-			stat &= ~(OMAP_I2C_STAT_XDR | OMAP_I2C_STAT_XRDY);
++			ignored = stat & (OMAP_I2C_STAT_XDR | OMAP_I2C_STAT_XRDY);
+ 		else
+-			stat &= ~(OMAP_I2C_STAT_RDR | OMAP_I2C_STAT_RRDY);
++			ignored = stat & (OMAP_I2C_STAT_RDR | OMAP_I2C_STAT_RRDY);
++		if (ignored) {
++			omap_i2c_ack_stat(omap, ignored);
++			if (omap_i2c_read_reg(omap, OMAP_I2C_STAT_REG) & ignored)
++				omap_i2c_mask_irq_sources(omap, ignored);
++			stat &= ~ignored;
++		}
+ 
+ 		if (!stat) {
+ 			/* my work here is done */
+@@ -1370,10 +1557,22 @@ omap_i2c_isr_thread(int this_irq, void *dev_id)
+ 		}
+ 
+ 		dev_dbg(omap->dev, "IRQ (ISR = 0x%04x)\n", stat);
+-		if (count++ == 100) {
+-			dev_warn(omap->dev, "Too much work in one IRQ\n");
++		if (count >= OMAP_I2C_ISR_LIMIT) {
++			dev_err_ratelimited(omap->dev,
++				"Too much work in one IRQ (stat=0x%04x)\n",
++				stat);
++			/*
++			 * Bytes were moving: yield and let the next entry
++			 * continue the message. Nothing moved: the status
++			 * bit is stuck and the epilogue must drop the line.
++			 */
++			if (omap->irq_progress)
++				goto out;
++			err |= OMAP_I2C_STAT_AL;
++			gave_up = 1;
+ 			break;
+ 		}
++		count++;
+ 
+ 		if (stat & OMAP_I2C_STAT_NACK) {
+ 			err |= OMAP_I2C_STAT_NACK;
+@@ -1422,6 +1621,7 @@ omap_i2c_isr_thread(int this_irq, void *dev_id)
+ 			}
+ 
+ 			omap_i2c_receive_data(omap, num_bytes, true);
++			omap->irq_progress = 1;
+ 			omap_i2c_ack_stat(omap, OMAP_I2C_STAT_RDR);
+ 			continue;
+ 		}
+@@ -1433,6 +1633,7 @@ omap_i2c_isr_thread(int this_irq, void *dev_id)
+ 				num_bytes = omap->threshold;
+ 
+ 			omap_i2c_receive_data(omap, num_bytes, false);
++			omap->irq_progress = 1;
+ 			omap_i2c_ack_stat(omap, OMAP_I2C_STAT_RRDY);
+ 			continue;
+ 		}
+@@ -1448,6 +1649,7 @@ omap_i2c_isr_thread(int this_irq, void *dev_id)
+ 			if (ret < 0)
+ 				break;
+ 
++			omap->irq_progress = 1;
+ 			omap_i2c_ack_stat(omap, OMAP_I2C_STAT_XDR);
+ 			continue;
+ 		}
+@@ -1463,6 +1665,7 @@ omap_i2c_isr_thread(int this_irq, void *dev_id)
+ 			if (ret < 0)
+ 				break;
+ 
++			omap->irq_progress = 1;
+ 			omap_i2c_ack_stat(omap, OMAP_I2C_STAT_XRDY);
+ 			continue;
+ 		}
+@@ -1480,11 +1683,43 @@ omap_i2c_isr_thread(int this_irq, void *dev_id)
+ 			omap_i2c_ack_stat(omap, OMAP_I2C_STAT_XUDF);
+ 			break;
+ 		}
++
++		/* Enabled status this pass did not recognize. */
++		omap_i2c_ack_stat(omap, stat & OMAP_I2C_STAT_IRQ_MASK);
+ 	} while (stat);
+ 
+ 	omap_i2c_complete_cmd(omap, err);
++	completed = 1;
+ 
+ out:
++	/*
++	 * A live transfer can return with the next byte already pending.
++	 * That re-entry is the oneshot thread doing its job. Recover when
++	 * this invocation gave up without moving data, or when a status
++	 * bit that was already set on entry is still set across
++	 * OMAP_I2C_STALL_LIMIT returns. Otherwise irq_finalize_oneshot
++	 * unmasks a line that never drops and CPU 0 stays inside
++	 * irq/N-4819c00.
++	 */
++	exit_pending = omap_i2c_pending_irq(omap);
++	if (exit_pending & entry_pending) {
++		if (omap->irq_stall < 250)
++			omap->irq_stall++;
++		omap->irq_stall_stat = exit_pending & entry_pending;
++	} else {
++		omap->irq_stall = 0;
++		omap->irq_stall_stat = 0;
++	}
++
++	if (omap_i2c_quiesce_irq(omap,
++				 (gave_up && exit_pending) ||
++				 omap->irq_stall >= OMAP_I2C_STALL_LIMIT)) {
++		omap->cmd_err |= OMAP_I2C_STAT_AL;
++		if (!completed)
++			omap_i2c_complete_cmd(omap, OMAP_I2C_STAT_AL);
++	}
++	omap->irq_progress = 0;
++	omap_i2c_restore_saved_irqs(omap, saved_ie);
+ 	spin_unlock_irqrestore(&omap->lock, flags);
+ 
+ 	return IRQ_HANDLED;
