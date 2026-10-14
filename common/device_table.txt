@@ -7,3 +7,7 @@
 #
 # <name>                <type>  <mode>  <uid>   <gid>   <major> <minor> <start> <inc>   <count>
 /etc/monitrc            f   600 0   0   -   -   -   -   -
+/sbin/reboot            f   700 0   0   -   -   -   -   -
+/sbin/halt              f   700 0   0   -   -   -   -   -
+/sbin/poweroff          f   700 0   0   -   -   -   -   -
+/sbin/flush-filesystems f   700 0   0   -   -   -   -   -

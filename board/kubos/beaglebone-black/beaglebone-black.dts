@@ -16,6 +16,7 @@
 /dts-v1/;
 
 #include "am33xx-boneblack.dtsi"
+#include <dt-bindings/i2c/i2c.h>
 
 / {
 	model = "Beaglebone Black";
@@ -110,7 +111,13 @@
 
 &i2c2 {
 	status = "okay";
-	
+
+	/* OBC own address 0x09. The radios master-write frames here. */
+	frameq@40000009 {
+		compatible = "slave-frameq";
+		reg = <(I2C_OWN_SLAVE_ADDRESS | 0x09)>;
+	};
+
 	rv3028: rtc@52 {
 		compatible = "microcrystal,rv3028";
 		reg = <0x52>;

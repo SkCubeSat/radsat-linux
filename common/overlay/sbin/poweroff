@@ -1,0 +1,19 @@
+#!/bin/sh
+#
+# Only root may power off. Replaces the busybox symlink so a normal
+# user is refused before anything is signalled.
+#
+
+euid=""
+while read -r key _real e _saved _fs; do
+    if [ "$key" = "Uid:" ]; then
+        euid=$e
+        break
+    fi
+done < /proc/self/status
+if [ "$euid" != "0" ]; then
+    echo "poweroff: must be root" >&2
+    exit 1
+fi
+
+exec /bin/busybox poweroff "$@"

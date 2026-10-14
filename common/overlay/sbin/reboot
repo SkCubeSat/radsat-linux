@@ -2,10 +2,24 @@
 #
 # Force reboot. Replaces the busybox symlink.
 #
-# Arm the hardware watchdog, bound the filesystem flush, then force
-# the reboot syscall. The kernel turns the I2C controllers off and
-# requests the warm reset. inittab cannot sit in rcK on this path.
+# Only root may run this. The check is first so a normal user cannot
+# arm the watchdog or unmount anything. Then arm the watchdog, bound
+# the filesystem flush, and force the reboot syscall. The kernel turns
+# the I2C controllers off and requests a cold reset. The console UART
+# is left alone. inittab cannot sit in rcK on this path.
 #
+
+euid=""
+while read -r key _real e _saved _fs; do
+    if [ "$key" = "Uid:" ]; then
+        euid=$e
+        break
+    fi
+done < /proc/self/status
+if [ "$euid" != "0" ]; then
+    echo "reboot: must be root" >&2
+    exit 1
+fi
 
 echo "reboot: forcing reset" > /dev/console 2>/dev/null
 

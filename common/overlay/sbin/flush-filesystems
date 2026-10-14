@@ -9,6 +9,21 @@
 # timeout is 60s) and the hardware timer resets the chip even if
 # this script never returns.
 #
+# Only root may run this. init's shutdown line and /sbin/reboot are
+# root. A normal user must not be able to arm the watchdog here.
+#
+
+euid=""
+while read -r key _real e _saved _fs; do
+    if [ "$key" = "Uid:" ]; then
+        euid=$e
+        break
+    fi
+done < /proc/self/status
+if [ "$euid" != "0" ]; then
+    echo "flush-filesystems: must be root" >&2
+    exit 1
+fi
 
 say() {
     echo "flush-filesystems: $*" > /dev/console 2>/dev/null
