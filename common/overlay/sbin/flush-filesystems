@@ -1,0 +1,96 @@
+#!/bin/sh
+#
+# Bounded filesystem flush for shutdown.
+#
+# init runs this from inittab, and /sbin/reboot runs it before the
+# reboot syscall. umount and a stop script can sit forever in D
+# state. timeout cannot kill that, so the watchdog is armed first:
+# close without the magic 'V' leaves it running (omap_wdt default
+# timeout is 60s) and the hardware timer resets the chip even if
+# this script never returns.
+#
+
+say() {
+    echo "flush-filesystems: $*" > /dev/console 2>/dev/null
+}
+
+arm_watchdog() {
+    best=""
+    sys=""
+    name=""
+    drv=""
+    link=""
+
+    for sys in /sys/class/watchdog/watchdog*; do
+        [ -e "$sys" ] || continue
+        name=${sys##*/}
+        drv=""
+        if [ -L "$sys/device/driver" ]; then
+            link=$(readlink "$sys/device/driver" 2>/dev/null)
+            drv=${link##*/}
+        fi
+        if [ "$drv" = "omap_wdt" ]; then
+            best=/dev/$name
+            break
+        fi
+    done
+
+    if [ -n "$best" ]; then
+        sys=$best
+    else
+        say "omap_wdt not found"
+        return
+    fi
+
+    # One byte that is not V. Open starts the timer, the write is a
+    # keepalive, and close without the magic character leaves it armed.
+    if ( printf 'x' >&9 ) 9<>"$sys" 2>/dev/null; then
+        say "armed $sys"
+    else
+        say "failed to open $sys"
+    fi
+}
+
+if [ -x /usr/bin/timeout ]; then
+    TIMEOUT=/usr/bin/timeout
+elif [ -x /bin/timeout ]; then
+    TIMEOUT=/bin/timeout
+else
+    TIMEOUT=""
+fi
+
+run_bounded() {
+    secs=$1
+    shift
+    if [ ! -x "$1" ] && [ ! -f "$1" ]; then
+        return 0
+    fi
+    if [ -n "$TIMEOUT" ]; then
+        "$TIMEOUT" -s KILL "$secs" "$@"
+    else
+        "$@"
+    fi
+}
+
+arm_watchdog
+sync
+run_bounded 10 /etc/init.d/rcK
+
+KILLALL5=""
+for k in /usr/sbin/killall5 /sbin/killall5 /usr/bin/killall5 /bin/killall5; do
+    if [ -x "$k" ]; then
+        KILLALL5=$k
+        break
+    fi
+done
+if [ -n "$KILLALL5" ]; then
+    run_bounded 5 "$KILLALL5" -15
+    sleep 1
+    run_bounded 3 "$KILLALL5" -9
+fi
+
+sync
+run_bounded 5 /sbin/swapoff -a
+run_bounded 8 /bin/umount -a -r
+sync
+exit 0

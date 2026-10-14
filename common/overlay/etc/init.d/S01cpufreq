@@ -1,0 +1,52 @@
+#!/bin/sh
+#
+# Pin CPU0 at 720 MHz once cpufreq is up.
+#
+# The BeagleBone Black config uses the userspace governor, which
+# leaves the boot OPP in place until scaling_setspeed is written.
+# 720000 is the top OPP in the AM33xx table. Boards that do not
+# advertise it (the AT91 OBC) leave the clock alone.
+#
+
+SYS=/sys/devices/system/cpu/cpu0/cpufreq
+TARGET=720000
+
+case "$1" in
+  start)
+    i=0
+    while [ ! -f "$SYS/scaling_available_frequencies" ]; do
+        i=$((i + 1))
+        if [ "$i" -ge 10 ]; then
+            echo "S01cpufreq: cpufreq sysfs not present"
+            exit 0
+        fi
+        sleep 1
+    done
+
+    found=0
+    for f in $(cat "$SYS/scaling_available_frequencies"); do
+        if [ "$f" = "$TARGET" ]; then
+            found=1
+        fi
+    done
+    if [ "$found" -ne 1 ]; then
+        echo "S01cpufreq: $TARGET is not an available frequency"
+        exit 0
+    fi
+
+    echo userspace > "$SYS/scaling_governor"
+    echo "$TARGET" > "$SYS/scaling_setspeed"
+
+    if [ -r "$SYS/cpuinfo_cur_freq" ]; then
+        echo "S01cpufreq: cpuinfo_cur_freq $(cat "$SYS/cpuinfo_cur_freq")"
+    fi
+    ;;
+  stop)
+    ;;
+  *)
+    echo "Usage: $0 {start|stop}"
+    exit 1
+    ;;
+esac
+
+exit 0
