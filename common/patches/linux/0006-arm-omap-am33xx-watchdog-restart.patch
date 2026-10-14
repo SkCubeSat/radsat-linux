@@ -14,7 +14,7 @@ resets the chip.
 
 ---
 diff --git a/arch/arm/mach-omap2/am33xx-restart.c b/arch/arm/mach-omap2/am33xx-restart.c
-index 0000000..0000001 100644
+index abcd123..abcd124 100644
 --- a/arch/arm/mach-omap2/am33xx-restart.c
 +++ b/arch/arm/mach-omap2/am33xx-restart.c
 @@ -5,23 +5,118 @@
