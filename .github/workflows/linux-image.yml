@@ -233,15 +233,15 @@ jobs:
 
               strings "${BUILDROOT_OUTPUT}/images/u-boot.bin" \
                 > "${BUILDROOT_OUTPUT}/images/u-boot.strings"
-              grep -Fx "baudrate=921600" \
+              grep -Fx "baudrate=500000" \
                 "${BUILDROOT_OUTPUT}/images/u-boot.strings"
-              grep -Fx "console=ttyS0,921600" \
+              grep -Fx "console=ttyS0,500000" \
                 "${BUILDROOT_OUTPUT}/images/u-boot.strings"
               grep -Fqx \
-                "CONFIG_CMDLINE=\"console=ttyS0,921600n8 root=/dev/mmcblk0p2 rw rootfstype=ext4 rootwait\"" \
+                "CONFIG_CMDLINE=\"console=ttyS0,500000n8 root=/dev/mmcblk0p2 rw rootfstype=ext4 rootwait\"" \
                 "${BUILDROOT_OUTPUT}/build/linux-4.4.23/.config"
               grep -Eq \
-                "^ttyS0::respawn:/sbin/getty .*[[:space:]]921600[[:space:]]" \
+                "^ttyS0::respawn:/sbin/getty .*[[:space:]]500000[[:space:]]" \
                 "${BUILDROOT_OUTPUT}/target/etc/inittab"
 
               make O="${BUILDROOT_OUTPUT}" ccache-stats || true

@@ -9,15 +9,18 @@ the warm reset waits for the handshake, then clears the watchdog.
 Soft-resetting the controller on a shared bus makes it drive SDA, and
 gating its clock without idle sticks the PRCM so the ROM never starts.
 
-Force-idle the listening controller and leave its clock alone. If it
-is idle, request the same warm reset the CAN image used. If it is
-not, do not request that reset. Arm the watchdog and wait.
+Force-idle the listening controller, then disable its module
+clock and wait until CLKCTRL reports idle. The warm reset waits
+for that handshake. Leaving the clock enabled keeps IDLEST
+functional, so the reset is never requested and a power cycle
+is the only way out. If the controller does go idle, request
+the same warm reset the CAN image used.
 
 diff --git a/arch/arm/mach-omap2/am33xx-restart.c b/arch/arm/mach-omap2/am33xx-restart.c
 index abcd123..abcd124 100644
 --- a/arch/arm/mach-omap2/am33xx-restart.c
 +++ b/arch/arm/mach-omap2/am33xx-restart.c
-@@ -103,20 +103,61 @@
+@@ -103,20 +103,80 @@
  	wdt_wait(base, WWPS_WSPR);
  }
  
@@ -30,7 +33,34 @@ index abcd123..abcd124 100644
 +}
 +
 +/* CLKCTRL.IDLEST: 0 functional, 1 transition, 2 idle, 3 disabled. */
-+#define AM33XX_CLKCTRL_IDLEST_MASK	(3u << 16)
++static int am33xx_i2c_idle_one(void __iomem *clkctrl)
++{
++	unsigned int spins = 100000;
++	u32 val, idlest;
++
++	val = readl_relaxed(clkctrl);
++	idlest = (val & AM33XX_IDLEST_MASK) >> 16;
++	if (idlest >= 2)
++		return 1;
++
++	/* The IP is force-idle. Now it can acknowledge a clock stop. */
++	val &= ~AM33XX_MODULEMODE_MASK;
++	writel_relaxed(val, clkctrl);
++
++	while (spins--) {
++		val = readl_relaxed(clkctrl);
++		idlest = (val & AM33XX_IDLEST_MASK) >> 16;
++		if (idlest >= 2)
++			return 1;
++		cpu_relax();
++	}
++
++	val &= ~AM33XX_MODULEMODE_MASK;
++	val |= 0x2;
++	writel_relaxed(val, clkctrl);
++	pr_emerg("am33xx: i2c idlest %u\n", idlest);
++	return 0;
++}
 +
 +static int am33xx_i2c_idle(void)
 +{
@@ -38,19 +68,10 @@ index abcd123..abcd124 100644
 +		AM33XX_CM_PER_I2C1_CLKCTRL,
 +		AM33XX_CM_PER_I2C2_CLKCTRL,
 +	};
-+	unsigned int n, spins;
-+	u32 idlest;
++	unsigned int n;
 +
 +	for (n = 0; n < ARRAY_SIZE(clkctrl); n++) {
-+		spins = 100000;
-+		do {
-+			idlest = readl_relaxed(clkctrl[n]);
-+			idlest = (idlest & AM33XX_CLKCTRL_IDLEST_MASK) >> 16;
-+			if (idlest >= 2)
-+				break;
-+			cpu_relax();
-+		} while (spins--);
-+		if (idlest < 2)
++		if (!am33xx_i2c_idle_one(clkctrl[n]))
 +			return 0;
 +	}
 +	return 1;
@@ -68,16 +89,17 @@ index abcd123..abcd124 100644
 - * does not return. If that reset hangs, the watchdog resets the chip.
 + * The radios share I2C2, so that controller is left listening as a
 + * slave. A slave never goes idle, and the warm reset waits for that
-+ * handshake, then clears the watchdog. Drop slave listen first. If
-+ * the controller is idle, request the same warm reset the CAN image
-+ * used. If it is not, do not request that reset: arm WDT1 and wait.
++ * handshake. Drop slave listen, force-idle the controller, then
++ * stop its module clock. If CLKCTRL reports idle, request the same
++ * warm reset the CAN image used. If it does not, leave the clock
++ * enabled and wait on the watchdog.
   */
  void am33xx_restart(enum reboot_mode mode, const char *cmd)
  {
 -	am33xx_arm_wdt();
 +	omap_i2c_quiesce_for_restart();
++	am33xx_arm_wdt();
 +	if (!am33xx_i2c_idle()) {
-+		am33xx_arm_wdt();
 +		pr_emerg("am33xx: i2c did not idle\n");
 +		while (1)
 +			cpu_relax();
@@ -89,7 +111,7 @@ diff --git a/drivers/i2c/busses/i2c-omap.c b/drivers/i2c/busses/i2c-omap.c
 index abcd123..abcd124 100644
 --- a/drivers/i2c/busses/i2c-omap.c
 +++ b/drivers/i2c/busses/i2c-omap.c
-@@ -1863,6 +1863,73 @@
+@@ -1863,6 +1863,74 @@
  	.recover_bus		= i2c_generic_scl_recovery,
  };
  
@@ -123,9 +145,10 @@ index abcd123..abcd124 100644
 +	omap_i2c_write_reg(omap, OMAP_I2C_CON_REG, 0);
 +	if (omap->rev < OMAP_I2C_OMAP1_REV_2)
 +		return;
++	omap_i2c_write_reg(omap, OMAP_I2C_OA_REG, 0);
 +
 +	sysc = omap_i2c_read_reg(omap, OMAP_I2C_SYSC_REG);
-+	sysc &= ~SYSC_SIDLEMODE_MASK;
++	sysc &= ~(SYSC_SIDLEMODE_MASK | SYSC_ENAWAKEUP_MASK);
 +	sysc |= SYSC_AUTOIDLE_MASK;
 +	omap_i2c_write_reg(omap, OMAP_I2C_SYSC_REG, sysc);
 +	omap_i2c_read_reg(omap, OMAP_I2C_CON_REG);
@@ -183,7 +206,8 @@ diff --git a/drivers/watchdog/omap_wdt.c b/drivers/watchdog/omap_wdt.c
 index abcd123..abcd124 100644
 --- a/drivers/watchdog/omap_wdt.c
 +++ b/drivers/watchdog/omap_wdt.c
-@@ -295,6 +295,11 @@
+@@ -294,11 +294,16 @@ static void omap_wdt_shutdown(struct platform_device *pdev)
+ static void omap_wdt_shutdown(struct platform_device *pdev)
  {
  	struct omap_wdt_dev *wdev = platform_get_drvdata(pdev);
  
@@ -195,3 +219,7 @@ index abcd123..abcd124 100644
  	mutex_lock(&wdev->lock);
  	if (wdev->omap_wdt_users) {
  		omap_wdt_disable(wdev);
+ 		pm_runtime_put_sync(wdev->dev);
+ 	}
+ 	mutex_unlock(&wdev->lock);
+ }
