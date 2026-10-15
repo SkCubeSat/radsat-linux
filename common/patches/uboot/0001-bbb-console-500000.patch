@@ -7,6 +7,11 @@ Subject: [PATCH] arm: am33xx: use 500000 for the BBB console
 the divisor is 6, so the bootloader and the kernel transmit at the
 rate the terminal is set to. That is about four times 115200.
 
+115200 stays out of the baud table. A saved environment from an older
+image still contains baudrate=115200, and U-Boot would switch to it.
+The kernel console baud is set in the bootargs, so that saved console
+variable cannot move the boot log either.
+
 ---
 diff --git a/include/configs/beaglebone-black.h b/include/configs/beaglebone-black.h
 index abcd123..abcd124 100644
@@ -20,11 +25,17 @@ index abcd123..abcd124 100644
 +#define CONFIG_BAUDRATE         500000
  #define CONFIG_SYS_BAUDRATE_TABLE \
 -    { 9600, 19200, 38400, 57600, 115200, 921600 }
-+    { 9600, 19200, 38400, 57600, 115200, 500000 }
++    { 9600, 19200, 38400, 57600, 500000 }
  
  /* If we're compiling for the SPL, we don't have an env area */
  #if defined(CONFIG_SPL_BUILD) && defined(CONFIG_SPL_USBETH_SUPPORT)
-@@ -102,7 +102,7 @@
+@@ -97,12 +97,12 @@
+     "mmcdev=0\0" \
+     "mmcrootfstype=ext4 rootwait\0" \
+     "finduuid=part uuid mmc ${bootpart} uuid\0" \
+-    "args_mmc=run finduuid;setenv bootargs console=${console} " \
++    "args_mmc=run finduuid;setenv bootargs console=ttyS0,500000 " \
+         "${optargs} " \
          "root=PARTUUID=${uuid} ro " \
          "rootfstype=${mmcrootfstype}\0" \
      "bootfile=kernel\0" \
