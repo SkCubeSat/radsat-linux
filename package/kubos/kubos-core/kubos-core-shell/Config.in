@@ -59,3 +59,4 @@ config BR2_PACKAGE_HAS_KUBOS_CORE_SHELL
 config BR2_PACKAGE_PROVIDES_KUBOS_CORE_SHELL
     string
     default "kubos"
+    

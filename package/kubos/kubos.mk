@@ -59,8 +59,13 @@ define KUBOS_INSTALL_TARGET_CMDS
 endef
 
 define KUBOS_CREATE_CONFIG
-	# Collect all config fragment files into the final master config.toml file
-	cat $(KUBOS_CONFIG_FRAGMENT_DIR)/* > $(KUBOS_CONFIG_FILE)
+	# A fragment with no trailing newline would glue the next header onto its
+	# last line, and every service then refuses the whole file.
+	rm -f $(KUBOS_CONFIG_FILE)
+	for fragment in $(KUBOS_CONFIG_FRAGMENT_DIR)/*; do \
+		cat "$$fragment"; \
+		echo; \
+	done > $(KUBOS_CONFIG_FILE)
 endef
 
 
