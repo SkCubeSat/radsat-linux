@@ -4,9 +4,9 @@
 #
 # Only root may run this. The check is first so a normal user cannot
 # arm the watchdog or unmount anything. Then arm the watchdog, bound
-# the filesystem flush, and force the reboot syscall. The kernel turns
-# the I2C controllers off and requests a cold reset. The console UART
-# is left alone. inittab cannot sit in rcK on this path.
+# the filesystem flush, and force the reboot syscall. The kernel drops
+# I2C slave listen, then requests the same warm reset the CAN image
+# used. The console UART is left alone. inittab cannot sit in rcK.
 #
 
 euid=""

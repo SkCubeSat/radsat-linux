@@ -1,21 +1,23 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Radsat Developers <dev@radsat.local>
-Date: Tue, 13 Oct 2026 23:15:00 -0600
-Subject: [PATCH] i2c: omap: drop slave mode before the AM33xx reset
+Date: Wed, 14 Oct 2026 19:20:00 -0600
+Subject: [PATCH] i2c: omap: idle the slave before the AM33xx warm reset
 
-The warm reset waits until every I2C controller goes idle. A controller
-left in slave mode never does, and that request clears the watchdog, so
-the board sits until power is pulled. Turn every probed controller off
-with IRQs already disabled, gate the I2C1 and I2C2 clocks without
-waiting, then request the same warm reset the previous image used.
-Arm WDT1 before that, and do not let device_shutdown() clear a timer
-userspace armed for this reboot.
+The radios are the other masters on I2C2, so the controller stays in
+slave listen. That listen is required. It also never goes idle, and
+the warm reset waits for the handshake, then clears the watchdog.
+Soft-resetting the controller on a shared bus makes it drive SDA, and
+gating its clock without idle sticks the PRCM so the ROM never starts.
+
+Force-idle the listening controller and leave its clock alone. If it
+is idle, request the same warm reset the CAN image used. If it is
+not, do not request that reset. Arm the watchdog and wait.
 
 diff --git a/arch/arm/mach-omap2/am33xx-restart.c b/arch/arm/mach-omap2/am33xx-restart.c
 index abcd123..abcd124 100644
 --- a/arch/arm/mach-omap2/am33xx-restart.c
 +++ b/arch/arm/mach-omap2/am33xx-restart.c
-@@ -103,20 +103,49 @@
+@@ -103,20 +103,61 @@
  	wdt_wait(base, WWPS_WSPR);
  }
  
@@ -27,24 +29,31 @@ index abcd123..abcd124 100644
 +{
 +}
 +
-+/*
-+ * Do not poll IDLEST. The caller already disabled the I2C module.
-+ * Waiting here for idle is the hang this reset is leaving behind.
-+ */
-+static void am33xx_i2c_clocks_off(void)
++/* CLKCTRL.IDLEST: 0 functional, 1 transition, 2 idle, 3 disabled. */
++#define AM33XX_CLKCTRL_IDLEST_MASK	(3u << 16)
++
++static int am33xx_i2c_idle(void)
 +{
 +	void __iomem *clkctrl[] = {
 +		AM33XX_CM_PER_I2C1_CLKCTRL,
 +		AM33XX_CM_PER_I2C2_CLKCTRL,
 +	};
-+	int i;
-+	u32 val;
++	unsigned int n, spins;
++	u32 idlest;
 +
-+	for (i = 0; i < ARRAY_SIZE(clkctrl); i++) {
-+		val = readl_relaxed(clkctrl[i]);
-+		val &= ~AM33XX_MODULEMODE_MASK;
-+		writel_relaxed(val, clkctrl[i]);
++	for (n = 0; n < ARRAY_SIZE(clkctrl); n++) {
++		spins = 100000;
++		do {
++			idlest = readl_relaxed(clkctrl[n]);
++			idlest = (idlest & AM33XX_CLKCTRL_IDLEST_MASK) >> 16;
++			if (idlest >= 2)
++				break;
++			cpu_relax();
++		} while (spins--);
++		if (idlest < 2)
++			return 0;
 +	}
++	return 1;
 +}
 +
  /**
@@ -57,35 +66,39 @@ index abcd123..abcd124 100644
 - * driver and gated its clock. Arm WDT1 for one second through the
 - * static map, then request the warm reset. omap_prm_reset_system()
 - * does not return. If that reset hangs, the watchdog resets the chip.
-+ * Arm WDT1 first, then turn the I2C controllers off and drop the I2C1
-+ * and I2C2 clocks without waiting. The warm reset does not finish
-+ * while a slave controller is still listening, and requesting it
-+ * clears the watchdog. omap_prm_reset_system() does not return.
++ * The radios share I2C2, so that controller is left listening as a
++ * slave. A slave never goes idle, and the warm reset waits for that
++ * handshake, then clears the watchdog. Drop slave listen first. If
++ * the controller is idle, request the same warm reset the CAN image
++ * used. If it is not, do not request that reset: arm WDT1 and wait.
   */
  void am33xx_restart(enum reboot_mode mode, const char *cmd)
  {
- 	am33xx_arm_wdt();
--	pr_emerg("am33xx: warm reset\n");
+-	am33xx_arm_wdt();
 +	omap_i2c_quiesce_for_restart();
-+	am33xx_i2c_clocks_off();
-+	pr_emerg("am33xx: forcing warm reset\n");
++	if (!am33xx_i2c_idle()) {
++		am33xx_arm_wdt();
++		pr_emerg("am33xx: i2c did not idle\n");
++		while (1)
++			cpu_relax();
++	}
+ 	pr_emerg("am33xx: warm reset\n");
  	omap_prm_reset_system();
  }
 diff --git a/drivers/i2c/busses/i2c-omap.c b/drivers/i2c/busses/i2c-omap.c
 index abcd123..abcd124 100644
 --- a/drivers/i2c/busses/i2c-omap.c
 +++ b/drivers/i2c/busses/i2c-omap.c
-@@ -1863,6 +1863,76 @@
+@@ -1863,6 +1863,73 @@
  	.recover_bus		= i2c_generic_scl_recovery,
  };
  
 +/*
-+ * am33xx_restart() calls this with IRQs already off. The warm reset
-+ * waits until every I2C controller goes idle, and a controller left in
-+ * slave mode never does. That request also clears the watchdog.
-+ * Mask interrupts, soft-reset, and leave the module disabled. No
-+ * sleeping and no runtime-PM get: a suspended controller has its
-+ * clock off, and a register read there can stall the interconnect.
++ * am33xx_restart() calls this with IRQs already off. Slave listen is
++ * how the radios share this bus. Leave the module enabled and it never
++ * idles. Do not soft-reset it: on a shared bus that reset makes BB
++ * invalid and the controller can drive SDA. Force-idle instead.
++ * A suspended controller has its clock off. Do not touch its registers.
 + */
 +#define OMAP_I2C_RESTART_MAX	4
 +
@@ -94,7 +107,7 @@ index abcd123..abcd124 100644
 +
 +static void omap_i2c_quiesce_one(struct omap_i2c_dev *omap)
 +{
-+	unsigned int spins = 1000;
++	u16 sysc;
 +
 +	if (!omap->base || !omap->regs)
 +		return;
@@ -111,14 +124,11 @@ index abcd123..abcd124 100644
 +	if (omap->rev < OMAP_I2C_OMAP1_REV_2)
 +		return;
 +
-+	omap_i2c_write_reg(omap, OMAP_I2C_SYSC_REG, SYSC_SOFTRESET_MASK);
-+	/* RESETDONE is sampled only while the module enable bit is set. */
-+	omap_i2c_write_reg(omap, OMAP_I2C_CON_REG, OMAP_I2C_CON_EN);
-+	while (spins-- &&
-+	       !(omap_i2c_read_reg(omap, OMAP_I2C_SYSS_REG) &
-+		 SYSS_RESETDONE_MASK))
-+		udelay(1);
-+	omap_i2c_write_reg(omap, OMAP_I2C_CON_REG, 0);
++	sysc = omap_i2c_read_reg(omap, OMAP_I2C_SYSC_REG);
++	sysc &= ~SYSC_SIDLEMODE_MASK;
++	sysc |= SYSC_AUTOIDLE_MASK;
++	omap_i2c_write_reg(omap, OMAP_I2C_SYSC_REG, sysc);
++	omap_i2c_read_reg(omap, OMAP_I2C_CON_REG);
 +}
 +
 +void omap_i2c_quiesce_for_restart(void)
@@ -149,10 +159,11 @@ index abcd123..abcd124 100644
 +	}
 +}
 +
++
  static int
  omap_i2c_probe(struct platform_device *pdev)
  {
-@@ -2026,6 +2096,7 @@
+@@ -2026,6 +2093,7 @@
  		 major, minor, omap->speed);
  
  	pm_runtime_mark_last_busy(omap->dev);
@@ -160,7 +171,7 @@ index abcd123..abcd124 100644
  	pm_runtime_put_autosuspend(omap->dev);
  
  	return 0;
-@@ -2044,6 +2115,7 @@
+@@ -2044,6 +2112,7 @@
  	struct omap_i2c_dev	*omap = platform_get_drvdata(pdev);
  	int ret;
  
