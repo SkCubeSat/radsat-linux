@@ -21,10 +21,60 @@
 / {
 	model = "Beaglebone Black";
 	compatible = "kubos,bbb", "ti,am335x-bone-black", "ti,am335x-bone", "ti,am33xx";
-
 };
 
 &am33xx_pinmux {
+	/*
+	 * am335x-bone-common.dtsi already hogs clkout2_pin. Setting
+	 * pinctrl-0 here replaces that property, so clkout2 stays listed.
+	 * There is no gpio-of-helper driver in this kernel.
+	 */
+	pinctrl-names = "default";
+	pinctrl-0 = <&clkout2_pin &satellite_gpio_pins>;
+
+	/* Satellite Mission GPIO Configuration */
+	satellite_gpio_pins: pinmux_satellite_gpio_pins {
+		pinctrl-single,pins = <
+			/* GPIO 1: P9.25 (MCASP0_AHCLKX -> gpio3_21) - VHF Serial In, Output, PDR */
+			0x1ac (PIN_OUTPUT_PULLDOWN | MUX_MODE7)
+
+			/* GPIO 2: P8.7  (GPMC_ADVN_ALE -> gpio2_2)  - VHF Serial Out, Input, PUR */
+			0x090 (PIN_INPUT_PULLUP    | MUX_MODE7)
+
+			/* GPIO 3: P9.27 (MCASP0_FSR    -> gpio3_19) - UHF Serial In, Output, PDR */
+			0x1a4 (PIN_OUTPUT_PULLDOWN | MUX_MODE7)
+
+			/* GPIO 4: P9.42 Ball C18 (ECAP0        -> gpio0_7)  - UHF Serial Out, Input, PUR */
+			0x164 (PIN_INPUT_PULLUP    | MUX_MODE7)
+
+			/* GPIO 4: P9.42 Ball B12 (MCASP0_ACLKR -> gpio3_18) - UHF Serial Out, Input, PUR */
+			0x1a0 (PIN_INPUT_PULLUP    | MUX_MODE7)
+
+			/* GPIO 5: P8.10 (GPMC_WEN      -> gpio2_4)  - +X Solar Panel Serial Out, Input, PUR */
+			0x098 (PIN_INPUT_PULLUP    | MUX_MODE7)
+
+			/* GPIO 6: P8.9  (GPMC_BEN0_CLE -> gpio2_5)  - -X Solar Panel Serial Out, Input, PUR */
+			0x094 (PIN_INPUT_PULLUP    | MUX_MODE7)
+
+			/* GPIO 7: P8.16 (GPMC_AD14     -> gpio1_14) - GNSS Enable, Output, PUR */
+			0x038 (PIN_OUTPUT_PULLUP   | MUX_MODE7)
+
+			/* GPIO 8: P8.26 (GPMC_CSN0     -> gpio1_29) - SNN Enable, Output, PDR */
+			0x07c (PIN_OUTPUT_PULLDOWN | MUX_MODE7)
+
+			/* GPIO 9: P8.8  (GPMC_OEN_REN  -> gpio2_3)  - CNN Boot, Output, PUR */
+			0x08c (PIN_OUTPUT_PULLUP   | MUX_MODE7)
+
+			/* GPIO 10: P9.12 (GPMC_BEN1 -> gpio1_28) - GNSS Reset, Output, PUR */
+			0x078 (PIN_OUTPUT_PULLUP   | MUX_MODE7)
+
+			/* GPIO 11: P9.15 (GPMC_A0 -> gpio1_16) - SNN Reset, Output, PDR */
+			0x040 (PIN_OUTPUT_PULLDOWN | MUX_MODE7)
+
+			/* ADCS Enable: P8.15 (GPMC_AD15 -> gpio1_15) - ADCS Enable Control, Output, PUR */
+			0x03c (PIN_OUTPUT_PULLUP   | MUX_MODE7)
+		>;
+	};
 
 	uart1_pins: pinmux_uart1_pins {
 		pinctrl-single,pins = <
@@ -67,7 +117,6 @@
 		>;
 	};
 
-
 	i2c1_pins: pinmux_i2c1_pins {
 		pinctrl-single,pins = <
 			0x158 (PIN_INPUT_PULLUP | MUX_MODE2)	/* SDA - P9.18 */
@@ -84,28 +133,24 @@
 		>;
 	};
 
-
 	dcan0_pins_default: dcan0_pins_default {
 		pinctrl-single,pins = <
-			AM33XX_IOPAD(0x920, PIN_INPUT_PULLUP  | MUX_MODE1) /* MII1_TXD2 -> dcan0_rx () */
-			AM33XX_IOPAD(0x91c, PIN_OUTPUT_PULLUP | MUX_MODE1) /* MII1_TXD3 -> dcan0_tx () */
+			AM33XX_IOPAD(0x920, PIN_INPUT_PULLUP  | MUX_MODE1) /* MII1_TXD2 -> dcan0_rx */
+			AM33XX_IOPAD(0x91c, PIN_OUTPUT_PULLUP | MUX_MODE1) /* MII1_TXD3 -> dcan0_tx */
 		>;
 	};
 
 	dcan0_clk: dcan0_clk {
 		#clock-cells = <0>;
 		compatible = "fixed-clock";
-		clock_frequency = <24000000>;	
+		clock_frequency = <24000000>;
 	};
-
-
 };
 
 &i2c1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c1_pins>;
 	clock-frequency = <100000>;
-
 	status = "okay";
 };
 
@@ -137,6 +182,7 @@
 };
 
 &uart3 {
+	/* Pad 0x164 is P9.42 and is hogged as the UHF serial GPIO. */
 	status = "disabled";
 };
 
@@ -155,16 +201,17 @@
 &spi1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&spi1_pins>;
-        ti,spi-num-cs = <1>;
-        cs-gpios = <&gpio3 17 0>, <&gpio0 7 0>;
+	ti,spi-num-cs = <1>;
+	/* gpio0_7 is P9.42 ball C18, claimed by the satellite GPIO hog. */
+	cs-gpios = <&gpio3 17 0>;
 
 	status = "okay";
 
-        spidev@0 {
+	spidev@0 {
 		spi-max-frequency = <24000000>;
 		reg = <0>;
 		compatible = "spidev";
-        };
+	};
 };
 
 &tscadc {
@@ -177,7 +224,6 @@
 	};
 };
 
-
 &dcan0 {
 	compatible = "ti,am3352-d_can", "bosch,d_can";
 	status = "okay";
@@ -185,16 +231,20 @@
 	pinctrl-0 = <&dcan0_pins_default>;
 };
 
-
 /* Disable CPSW Ethernet */
 &mac {
-    status = "disabled";
+	status = "disabled";
 };
 
 &cpsw_emac0 {
-    status = "disabled";
-};
-&cpsw_emac1 {
-    status = "disabled";
+	status = "disabled";
 };
 
+&cpsw_emac1 {
+	status = "disabled";
+};
+
+/* Disable McASP audio to release Ball B12 (0x1a0) on P9.42 */
+&mcasp0 {
+	status = "disabled";
+};
