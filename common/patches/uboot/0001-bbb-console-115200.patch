@@ -1,16 +1,11 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Radsat Developers <dev@radsat.local>
-Date: Wed, 14 Oct 2026 21:00:00 -0600
-Subject: [PATCH] arm: am33xx: use 500000 for the BBB console
+Date: Tue, 27 Oct 2026 16:20:00 -0600
+Subject: [PATCH] arm: am33xx: use 115200 for the BBB console
 
-921600 does not divide the 48 MHz UART clock in 16x mode. 500000 does:
-the divisor is 6, so the bootloader and the kernel transmit at the
-rate the terminal is set to. That is about four times 115200.
-
-115200 stays out of the baud table. A saved environment from an older
-image still contains baudrate=115200, and U-Boot would switch to it.
-The kernel console baud is set in the bootargs, so that saved console
-variable cannot move the boot log either.
+Use a single baud rate for U-Boot, kernel bootargs, and getty so the
+serial log is readable end-to-end. 921600 does not divide the 48 MHz
+UART clock cleanly; 115200 is the common reliable rate.
 
 ---
 diff --git a/include/configs/beaglebone-black.h b/include/configs/beaglebone-black.h
@@ -22,10 +17,10 @@ index abcd123..abcd124 100644
  /* Keep BBB baudrate local to this board instead of changing all AM335x targets */
  #undef CONFIG_BAUDRATE
 -#define CONFIG_BAUDRATE         921600
-+#define CONFIG_BAUDRATE         500000
++#define CONFIG_BAUDRATE         115200
  #define CONFIG_SYS_BAUDRATE_TABLE \
 -    { 9600, 19200, 38400, 57600, 115200, 921600 }
-+    { 9600, 19200, 38400, 57600, 500000 }
++    { 9600, 19200, 38400, 57600, 115200, 500000 }
  
  /* If we're compiling for the SPL, we don't have an env area */
  #if defined(CONFIG_SPL_BUILD) && defined(CONFIG_SPL_USBETH_SUPPORT)
@@ -34,13 +29,13 @@ index abcd123..abcd124 100644
      "mmcrootfstype=ext4 rootwait\0" \
      "finduuid=part uuid mmc ${bootpart} uuid\0" \
 -    "args_mmc=run finduuid;setenv bootargs console=${console} " \
-+    "args_mmc=run finduuid;setenv bootargs console=ttyS0,500000 " \
++    "args_mmc=run finduuid;setenv bootargs console=ttyS0,115200 " \
          "${optargs} " \
          "root=PARTUUID=${uuid} ro " \
          "rootfstype=${mmcrootfstype}\0" \
      "bootfile=kernel\0" \
 -    "console=ttyS0,921600\0" \
-+    "console=ttyS0,500000\0" \
++    "console=ttyS0,115200\0" \
      "optargs=\0" \
      "loadimage=fatload mmc ${mmcdev}:1 ${loadaddr} /${bootfile}\0" \
      "loadfdt=fatload mmc ${mmcdev}:1 ${fdtaddr} /${board}.dtb\0" \

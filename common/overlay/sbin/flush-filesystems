@@ -25,6 +25,12 @@ if [ "$euid" != "0" ]; then
     exit 1
 fi
 
+# Stop init from respawning Monit while reboot kills it. The inittab
+# monit line checks for this file and sleeps instead of restarting.
+mkdir -p /run
+touch /run/shutting-down
+killall monit 2>/dev/null || true
+
 say() {
     echo "flush-filesystems: $*" > /dev/console 2>/dev/null
 }
@@ -89,6 +95,13 @@ run_bounded() {
 
 arm_watchdog
 sync
+
+# Drop Kubos data mounts first. Do NOT remount / read-only yet —
+# rcK and redirects to /dev/null still need a writable root.
+for m in /home/microsd /upgrade /envar /home; do
+    run_bounded 5 /bin/umount -l "$m" 2>/dev/null || true
+done
+
 run_bounded 10 /etc/init.d/rcK
 
 KILLALL5=""
@@ -105,7 +118,7 @@ if [ -n "$KILLALL5" ]; then
 fi
 
 sync
-run_bounded 5 /sbin/swapoff -a
-run_bounded 8 /bin/umount -a -r
+run_bounded 5 /sbin/swapoff -a 2>/dev/null || true
+run_bounded 8 /bin/umount -a -r 2>/dev/null || true
 sync
 exit 0

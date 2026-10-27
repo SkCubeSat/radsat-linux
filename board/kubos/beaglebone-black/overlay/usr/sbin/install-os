@@ -14,38 +14,115 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Copy a KubOS image from the SD card to the eMMC
+# Copy the Kubos image from the boot SD (mmcblk0) onto on-board eMMC
+# (mmcblk1). Only the used partition span is copied (not the full SD
+# size), then the eMMC MBR disk ID is changed so PARTUUID mounts cannot
+# collide while both media are present.
+#
 
-# Make sure the user's sure they want to wipe out their eMMC
-echo "** Warning ** This script will wipe out the current contents of the eMMC"
-echo "Are you sure you want to proceed? (y/N)"
-read ANSWER
+SD=/dev/mmcblk0
+EMMC=/dev/mmcblk1
 
-# Check if there *isn't* a 'y' in the answer
-if [ "$ANSWER" == "${ANSWER#[Yy]}" ] ;then
-    echo "Cancelling installation. Script exiting"
-    exit
+euid=""
+while read -r key _real e _saved _fs; do
+    if [ "$key" = "Uid:" ]; then
+        euid=$e
+        break
+    fi
+done < /proc/self/status
+if [ "$euid" != "0" ]; then
+    echo "install-os: must be root" >&2
+    exit 1
 fi
 
-# Stop monit
-echo "OS Install: Pausing monitoring"
-monit unmonitor all
+if [ ! -b "$SD" ] || [ ! -b "$EMMC" ]; then
+    echo "install-os: need $SD (SD) and $EMMC (eMMC)" >&2
+    exit 1
+fi
 
-# Stop all the services
+sd_type=$(cat /sys/block/mmcblk0/device/type 2>/dev/null)
+emmc_type=$(cat /sys/block/mmcblk1/device/type 2>/dev/null)
+if [ "$sd_type" != "SD" ] || [ "$emmc_type" != "MMC" ]; then
+    echo "install-os: unexpected media types (mmcblk0=$sd_type mmcblk1=$emmc_type)" >&2
+    echo "install-os: refusing to continue" >&2
+    exit 1
+fi
+
+echo "** Warning ** This will wipe the current contents of the eMMC ($EMMC)"
+echo "Are you sure you want to proceed? (y/N)"
+read ANSWER
+# shellcheck disable=SC3010
+if [ "$ANSWER" = "${ANSWER#[Yy]}" ]; then
+    echo "Cancelling installation."
+    exit 0
+fi
+
+# Prevent Monit from respawning services for the duration of the copy.
+mkdir -p /run
+touch /run/shutting-down
+echo "OS Install: Stopping Monit"
+monit quit 2>/dev/null || true
+killall monit 2>/dev/null || true
+sleep 1
+
 echo "OS Install: Stopping running services"
-for i in $(ls /var/run/*.pid); do
-    kill -15 $(cat $i)
+for i in /var/run/*.pid; do
+    [ -f "$i" ] || continue
+    kill -15 "$(cat "$i")" 2>/dev/null || true
 done
-killall -15 python
-
-# Give the system a moment to settle
+killall -15 python 2>/dev/null || true
 sleep 2
 
-# Unmount /home
-echo "OS Install: Prepping the file system"
-umount -l /home
+echo "OS Install: Unmounting Kubos volumes"
+umount -l /home/microsd 2>/dev/null || true
+umount -l /upgrade 2>/dev/null || true
+umount -l /envar 2>/dev/null || true
+umount -l /home 2>/dev/null || true
+umount -l ${EMMC}p* 2>/dev/null || true
 
-# Copy the SD card over to the eMMC
-echo "OS Install: Copying SD card contents over to eMMC. This process should take 10-15 minutes to complete"
-BLOCKS=$(cat /sys/class/block/mmcblk1/size)
-dd if=/dev/mmcblk0 count=${BLOCKS} status=noxfer | pv -s `expr ${BLOCKS} / 2`k | dd of=/dev/mmcblk1
+# Copy only through the end of the last SD partition, capped by eMMC size.
+# A full-disk dd of a larger SD hits unused (and sometimes bad) sectors and
+# also wastes hours writing empty space.
+END=0
+for p in /sys/block/mmcblk0/mmcblk0p*; do
+    [ -d "$p" ] || continue
+    start=$(cat "$p/start")
+    size=$(cat "$p/size")
+    part_end=$((start + size))
+    if [ "$part_end" -gt "$END" ]; then
+        END=$part_end
+    fi
+done
+
+if [ "$END" -le 0 ]; then
+    echo "install-os: no partitions found on $SD" >&2
+    exit 1
+fi
+
+EMMC_BLOCKS=$(cat /sys/block/mmcblk1/size)
+if [ "$END" -gt "$EMMC_BLOCKS" ]; then
+    echo "install-os: SD image span ($END sectors) larger than eMMC ($EMMC_BLOCKS)" >&2
+    exit 1
+fi
+
+MB=$((END / 2048))
+echo "OS Install: Copying ${END} sectors (~${MB} MiB) from $SD to $EMMC"
+
+if [ -x /usr/bin/pv ]; then
+    dd if="$SD" bs=512 count="$END" 2>/dev/null | pv -s $((END * 512)) | dd of="$EMMC" bs=512
+else
+    dd if="$SD" of="$EMMC" bs=512 count="$END"
+fi
+sync
+
+# MBR disk signature lives at offset 440. Kubos SD images use 0x4B4C4E58
+# ("KLNX"). Give the eMMC a different ID so PARTUUID=4b4c4e58-* only
+# matches the SD while both are inserted.
+echo "OS Install: Assigning unique eMMC disk signature"
+printf '\x59\x4e\x4c\x4b' | dd of="$EMMC" bs=1 seek=440 count=4 conv=notrunc 2>/dev/null
+sync
+
+echo "OS Install: Done."
+echo "Power off, remove the SD card, then boot from eMMC alone."
+echo "While the SD is still inserted, ROM/SPL will prefer the SD."
+exit 0

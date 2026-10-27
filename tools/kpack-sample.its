@@ -1,0 +1,21 @@
+/dts-v1/;
+
+/ {
+	description = "Sample Kubos upgrade (device tree only)";
+	#address-cells = <1>;
+
+	images {
+		beaglebone-black.dtb@1 {
+			data = /incbin/("./beaglebone-black.dtb");
+			type = "firmware";
+			arch = "arm";
+			os = "linux";
+			compression = "none";
+			load = <00000000>;
+			entry = <00000000>;
+			hash@1 {
+				algo = "sha256";
+			};
+		};
+	};
+};

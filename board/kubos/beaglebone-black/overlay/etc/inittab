@@ -35,21 +35,22 @@
 # Create /run/lock for fw_printenv/fw_setenv lock file (/var/lock -> ../run/lock)
 ::sysinit:/bin/mkdir -p /run/lock
 ::sysinit:/bin/chmod 1777 /run/lock
-# Mount the Kubos directories which use partuuid
+# Mount Kubos volumes. /home and /envar live on the main SD image.
+# /upgrade and /home/microsd come from aux-sd.img (disk 41555820) and
+# are optional when only kubos-linux.img is flashed.
 ::sysinit:/bin/mount /home
-::sysinit:/bin/mount /home/microsd
-::sysinit:/bin/mount /upgrade
+::sysinit:/bin/sh -c 'mount /home/microsd 2>/dev/null || true'
+::sysinit:/bin/sh -c 'mount /upgrade 2>/dev/null || true'
 ::sysinit:/bin/mount /envar
 # Setup hostname
 ::sysinit:/bin/hostname -F /etc/hostname
 # now run any rc scripts
 ::sysinit:/etc/init.d/rcS
-# Run Monit in standard run-levels. -I keeps it in the foreground so init
-# can respawn it; discard the console copy of the log (SET LOGFILE still applies).
-::respawn:/usr/bin/monit -Ic /etc/monitrc >/dev/null 2>&1
+# Run Monit via helper so reboot can stop respawns (see /sbin/monit-respawn).
+::respawn:/sbin/monit-respawn
 
 # Put a getty on the serial port
-ttyS0::respawn:/sbin/getty -L  ttyS0 500000 vt100 # GENERIC_SERIAL
+ttyS0::respawn:/sbin/getty -L  ttyS0 115200 vt100 # GENERIC_SERIAL
 
 # Stuff to do for the 3-finger salute
 #::ctrlaltdel:/sbin/reboot

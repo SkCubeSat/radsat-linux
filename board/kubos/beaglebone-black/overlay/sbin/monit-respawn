@@ -1,0 +1,8 @@
+#!/bin/sh
+# Init ::respawn helper. Sleeps during reboot instead of restarting Monit.
+if [ -e /run/shutting-down ]; then
+	while true; do
+		sleep 3600
+	done
+fi
+exec /usr/bin/monit -Ic /etc/monitrc >/dev/null 2>&1
