@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Sun, 1 Nov 2026 19:05:00 -0600
+Subject: [PATCH] arm: bbb: eMMC default boot, SD fallback only
+
+eMMC primary; SD recovery only.
+
+---
+--- a/board/ti/am335x/board.c	2026-11-01 19:14:36.665564990 -0600
++++ b/board/ti/am335x/board.c	2026-11-01 19:14:37.321206053 -0600
+@@ -762,6 +762,17 @@
+ 
+ #endif /* CONFIG_DM_ETH */
+ 
++#ifdef CONFIG_SPL_BUILD
++/*
++ * eMMC (mmc1) is the flight default. SD (mmc0) is recovery only.
++ */
++void board_boot_order(u32 *spl_boot_list)
++{
++	spl_boot_list[0] = BOOT_DEVICE_MMC2;
++	spl_boot_list[1] = BOOT_DEVICE_MMC1;
++}
++#endif
++
+ #ifdef CONFIG_SPL_LOAD_FIT
+ int board_fit_config_name_match(const char *name)
+ {
+--- a/include/configs/beaglebone-black.h	2026-11-01 19:14:36.660917665 -0600
++++ b/include/configs/beaglebone-black.h	2026-11-01 19:14:37.321377860 -0600
+@@ -95,10 +95,10 @@
+ #define CONFIG_BOOTCOMMAND \
+     "run distro_bootcmd"
+ 
++/* eMMC (1) default; SD (0) recovery fallback only. */
+ #define BOOT_TARGET_DEVICES(func) \
+-    func(LEGACY_MMC, legacy_mmc, "${boot_dev}") \
+-    func(LEGACY_MMC, legacy_mmc, 0) \
+     func(LEGACY_MMC, legacy_mmc, 1) \
++    func(LEGACY_MMC, legacy_mmc, 0) \
+ 
+ #ifndef CONFIG_SPL_BUILD
+ #define CONFIG_EXTRA_ENV_SETTINGS \

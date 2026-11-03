@@ -1,0 +1,247 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Fri, 30 Oct 2026 18:10:00 -0600
+Subject: [PATCH] arm: bbb: overlay FRAM mission policy keys after env
+
+Read allowlisted mission keys from I2C2 FRAM @ 0x50. Fail-open on bad
+layout/CRC/I2C. Never set bootcmd.
+
+---
+diff --git a/common/fram_mission.c b/common/fram_mission.c
+new file mode 100644
+--- /dev/null
++++ b/common/fram_mission.c
+@@ -0,0 +1,215 @@
++/*
++ * Overlay allowlisted mission/boot-policy keys from I2C2 FRAM (FM24CL64B @ 0x50).
++ *
++ * Anti-brick rules:
++ * - Never set bootcmd/bootargs/DFU/root from FRAM.
++ * - Bad layout magic, bad boot CRC, or I2C failure: warn and continue.
++ *
++ * SPDX-License-Identifier:	GPL-2.0+
++ */
++
++#include <common.h>
++#include <environment.h>
++#include <i2c.h>
++
++#ifndef CONFIG_FRAM_I2C_BUS
++# define CONFIG_FRAM_I2C_BUS	2	/* Linux /dev/i2c-2 — NOT cape EEPROM bus */
++#endif
++#ifndef CONFIG_FRAM_I2C_ADDR
++# define CONFIG_FRAM_I2C_ADDR	0x50
++#endif
++
++#define FRAM_RECORD_SIZE	32
++#define FRAM_SLOTS_PER_KEY	2
++#define FRAM_BOOT_POLICY_KEYS	6
++#define FRAM_BOOT_DATA_END	(FRAM_BOOT_POLICY_KEYS * FRAM_SLOTS_PER_KEY * FRAM_RECORD_SIZE)
++#define FRAM_LAYOUT_MAGIC	0x4D415246u	/* "FRAM" LE */
++#define FRAM_LAYOUT_VERSION	1
++#define FRAM_LAYOUT_OFFSET	2048
++#define FRAM_REC_MAGIC		0x4652
++
++struct fram_key {
++	u8 id;
++	const char *name;
++	u8 vtype;	/* 1=bool 2=timestamp 3=u64 */
++};
++
++static const struct fram_key fram_keys[] = {
++	{ 1, "remove_before_flight", 1 },
++	{ 2, "deployed", 1 },
++	{ 3, "deploy_start", 2 },
++	{ 4, "initial_safe_state_complete", 1 },
++	{ 5, "fsoo_timer", 3 },
++	{ 6, "detumbling_complete", 1 },
++};
++
++static u32 crc32_fram(const u8 *data, u32 len)
++{
++	u32 crc = 0xffffffff;
++	u32 i, b;
++
++	for (i = 0; i < len; i++) {
++		crc ^= data[i];
++		for (b = 0; b < 8; b++) {
++			if (crc & 1)
++				crc = (crc >> 1) ^ 0xedb88320;
++			else
++				crc >>= 1;
++		}
++	}
++	return ~crc;
++}
++
++static int fram_read(u16 offset, u8 *buf, int len)
++{
++	return i2c_read(CONFIG_FRAM_I2C_ADDR, offset, 2, buf, len);
++}
++
++static int fram_layout_present_invalid(void)
++{
++	u8 hdr[16];
++	u32 magic;
++	u16 ver;
++	int i, blank = 1;
++
++	if (fram_read(FRAM_LAYOUT_OFFSET, hdr, sizeof(hdr)))
++		return 0;
++	for (i = 0; i < 16; i++) {
++		if (hdr[i] != 0x00 && hdr[i] != 0xff)
++			blank = 0;
++	}
++	if (blank)
++		return 0;
++	magic = hdr[0] | (hdr[1] << 8) | (hdr[2] << 16) | (hdr[3] << 24);
++	ver = hdr[4] | (hdr[5] << 8);
++	return !(magic == FRAM_LAYOUT_MAGIC && ver == FRAM_LAYOUT_VERSION);
++}
++
++static int fram_boot_crc_ok(void)
++{
++	u8 data[FRAM_BOOT_DATA_END];
++	u8 rec[FRAM_RECORD_SIZE];
++	u32 stored, calc;
++	u16 off;
++
++	if (fram_read(0, data, sizeof(data)))
++		return 0;
++	calc = crc32_fram(data, sizeof(data));
++
++	off = 6 * FRAM_SLOTS_PER_KEY * FRAM_RECORD_SIZE;
++	if (fram_read(off, rec, sizeof(rec)))
++		return 0;
++	if ((rec[0] | (rec[1] << 8)) != FRAM_REC_MAGIC)
++		return 0;
++	if (rec[3] != 7 || rec[4] != 3 || rec[5] != 8)
++		return 0;
++	stored = rec[10] | (rec[11] << 8) | (rec[12] << 16) | (rec[13] << 24);
++	return stored == calc;
++}
++
++static int decode_and_set(const struct fram_key *key, const u8 *raw)
++{
++	char val[32];
++	u16 magic = raw[0] | (raw[1] << 8);
++	u32 seq_a, seq_b;
++	u8 slot_b[FRAM_RECORD_SIZE];
++	const u8 *best = raw;
++	u16 off_b;
++
++	if (magic != FRAM_REC_MAGIC || raw[2] != 1 || raw[3] != key->id)
++		return -1;
++	if (crc32_fram(raw, 28) !=
++	    (u32)(raw[28] | (raw[29] << 8) | (raw[30] << 16) | (raw[31] << 24)))
++		return -1;
++
++	off_b = ((key->id - 1) * FRAM_SLOTS_PER_KEY + 1) * FRAM_RECORD_SIZE;
++	if (!fram_read(off_b, slot_b, sizeof(slot_b))) {
++		u16 mb = slot_b[0] | (slot_b[1] << 8);
++		if (mb == FRAM_REC_MAGIC && slot_b[3] == key->id &&
++		    crc32_fram(slot_b, 28) ==
++			(u32)(slot_b[28] | (slot_b[29] << 8) |
++			      (slot_b[30] << 16) | (slot_b[31] << 24))) {
++			seq_a = raw[6] | (raw[7] << 8) | (raw[8] << 16) |
++				(raw[9] << 24);
++			seq_b = slot_b[6] | (slot_b[7] << 8) |
++				(slot_b[8] << 16) | (slot_b[9] << 24);
++			if (seq_b > seq_a)
++				best = slot_b;
++		}
++	}
++
++	if (best[4] != key->vtype)
++		return -1;
++
++	if (key->vtype == 1) {
++		if (best[5] != 1)
++			return -1;
++		strcpy(val, best[10] ? "true" : "false");
++	} else if (key->vtype == 2) {
++		if (best[5] == 0) {
++			setenv(key->name, NULL);
++			return 0;
++		}
++		if (best[5] != 8)
++			return -1;
++		sprintf(val, "%llu",
++			(unsigned long long)best[10] |
++			((unsigned long long)best[11] << 8) |
++			((unsigned long long)best[12] << 16) |
++			((unsigned long long)best[13] << 24) |
++			((unsigned long long)best[14] << 32) |
++			((unsigned long long)best[15] << 40) |
++			((unsigned long long)best[16] << 48) |
++			((unsigned long long)best[17] << 56));
++	} else if (key->vtype == 3) {
++		if (best[5] != 8)
++			return -1;
++		sprintf(val, "%llu",
++			(unsigned long long)best[10] |
++			((unsigned long long)best[11] << 8) |
++			((unsigned long long)best[12] << 16) |
++			((unsigned long long)best[13] << 24) |
++			((unsigned long long)best[14] << 32) |
++			((unsigned long long)best[15] << 40) |
++			((unsigned long long)best[16] << 48) |
++			((unsigned long long)best[17] << 56));
++	} else {
++		return -1;
++	}
++
++	setenv(key->name, val);
++	return 0;
++}
++
++void radsat_fram_overlay_env(void)
++{
++	unsigned int old_bus = i2c_get_bus_num();
++	u8 raw[FRAM_RECORD_SIZE];
++	int i;
++
++	if (i2c_set_bus_num(CONFIG_FRAM_I2C_BUS)) {
++		puts("FRAM: cannot select I2C2; skipping mission overlay\n");
++		return;
++	}
++
++	if (fram_layout_present_invalid()) {
++		puts("FRAM: layout magic/version mismatch; skipping mission overlay\n");
++		goto out;
++	}
++	if (!fram_boot_crc_ok()) {
++		puts("FRAM: boot-region CRC invalid; skipping mission overlay\n");
++		goto out;
++	}
++
++	for (i = 0; i < ARRAY_SIZE(fram_keys); i++) {
++		u16 off = (fram_keys[i].id - 1) * FRAM_SLOTS_PER_KEY *
++			  FRAM_RECORD_SIZE;
++		if (fram_read(off, raw, sizeof(raw)))
++			continue;
++		decode_and_set(&fram_keys[i], raw);
++	}
++	puts("FRAM: mission policy keys overlaid\n");
++
++out:
++	i2c_set_bus_num(old_bus);
++}
+diff --git a/board/ti/am335x/board.c b/board/ti/am335x/board.c
+--- a/board/ti/am335x/board.c
++++ b/board/ti/am335x/board.c
+@@ -1,3 +1,4 @@
++void radsat_fram_overlay_env(void);
+ /*
+  * board.c
+  *
+@@ -572,6 +573,9 @@
+ #ifdef CONFIG_BOARD_LATE_INIT
+ int board_late_init(void)
+ {
++#ifdef CONFIG_RADSAT_FRAM_POLICY
++	radsat_fram_overlay_env();
++#endif
+ #ifdef CONFIG_ENV_VARS_UBOOT_RUNTIME_CONFIG
+ 	int rc;
+ 	char *name = NULL;

@@ -1,0 +1,50 @@
+#!/bin/sh
+# Set one FRAM flag via fram-service. Usage: fram-set <name> <value> [mirror]
+# mirror defaults to false (MRAM owns classic U-Boot env).
+set -e
+URL="${FRAM_URL:-http://127.0.0.1:8091/}"
+NAME="${1:?usage: fram-set <name> <value> [mirrorToEnv]}"
+VALUE="${2:?usage: fram-set <name> <value> [mirrorToEnv]}"
+MIRROR="${3:-false}"
+
+# Keep names simple so nothing needs JSON/GraphQL escaping
+case "$NAME" in
+  *[!A-Za-z0-9_.-]*) echo "bad flag name: $NAME" >&2; exit 1 ;;
+esac
+case "$MIRROR" in
+  true|false) ;;
+  *) echo "mirror must be true or false" >&2; exit 1 ;;
+esac
+
+case "$VALUE" in
+  true|TRUE|True) ARG="boolValue:true" ;;
+  false|FALSE|False) ARG="boolValue:false" ;;
+  ''|*[!0-9-]*) echo "value must be true/false or an integer" >&2; exit 1 ;;
+  *) ARG="intValue:${VALUE}" ;;
+esac
+
+Q="mutation { setFlag(name:\\\"${NAME}\\\", ${ARG}, mirrorToEnv:${MIRROR}) {"
+Q="${Q} success errors flag { present boolValue intValue } } }"
+BODY="{\"query\":\"${Q}\"}"
+
+RAW_JSON=$(curl -sS "$URL" -H 'Content-Type: application/json' -d "$BODY")
+
+# No "data":{ means a top-level GraphQL error; show it as-is
+case "$RAW_JSON" in
+  *'"data":{'*) ;;
+  *) echo "$RAW_JSON"; exit 1 ;;
+esac
+
+echo "$RAW_JSON" | sed 's/{/{\n/g; s/}/\n}/g; s/,/\n/g' | awk '
+  function pad(n,   s, i) { s = ""; for (i = 0; i < n; i++) s = s "  "; return s }
+  BEGIN { d = 0 }
+  { gsub(/"/, "") }
+  /^$/ || /^\{$/ { next }
+  /^\}$/ { d--; next }
+  /:\{$/ {
+    key = $0; sub(/:\{$/, "", key)
+    if (key != "data") print pad(d - 1) key ":"
+    d++; next
+  }
+  { sub(/:/, ": "); print pad(d - 1) $0 }
+'

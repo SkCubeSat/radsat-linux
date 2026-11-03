@@ -1,0 +1,25 @@
+#!/bin/sh
+# Query fram-service GraphQL (port 8091). Usage: fram-get [name]
+set -e
+URL="${FRAM_URL:-http://127.0.0.1:8091/}"
+NAME="${1:-}"
+
+if [ -z "$NAME" ]; then
+  PAYLOAD='{"query":"{ missionState { removeBeforeFlight deployed deployStart initialSafeStateComplete fsooTimer detumblingComplete solarPanelDeployed uhfAntennaDeployed vhfAntennaDeployed bootChecksum adcsCommissioningLogged adcsCommissioned sunPointingConsent nadirPointingConsent platformCommissioned gnssSystemError gyro0Fail gyro1Fail mag0Fail mag1Fail reactionWheelFail sunSensorFail earthSensorFail sunPointingAngleFault sunPointingRateFault nadirPointingAngleFault nadirPointingRateFault antennaDeployAttempts solarPanelDeployAttempts nadirPointAttempts sunPointAttempts } memoryMap { layoutMagic layoutVersion } }"}'
+else
+  # JSON-escape backslashes and quotes in the name
+  ESC=$(printf '%s' "$NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  PAYLOAD='{"query":"query($n: String!) { flag(name: $n) { name keyId valueType present boolValue intValue } }","variables":{"n":"'"$ESC"'"}}'
+fi
+
+RAW_JSON=$(curl -sS "$URL" -H 'Content-Type: application/json' -d "$PAYLOAD")
+
+# Put every brace/comma on its own line, then indent by nesting
+echo "$RAW_JSON" | sed 's/{/{\n/g; s/}/\n}/g; s/,/\n/g' | awk -v RAW="$RAW_JSON" '
+  { gsub(/"/, "") }
+  /^$/ || /^\{$/ || /^\}$/ { next }
+  /^errors:/ { print "ERROR: see raw response below"; print RAW; next }
+  /^data:\{$/ { next }
+  /:\{$/ { sub(/:\{$/, ":"); print; next }
+  { sub(/:/, ": "); print "  " $0 }
+'

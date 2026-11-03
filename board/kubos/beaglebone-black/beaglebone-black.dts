@@ -231,7 +231,7 @@
 	pinctrl-0 = <&dcan0_pins_default>;
 };
 
-/* Disable CPSW Ethernet */
+/* Disable CPSW Ethernet — no PHY/connector on flight board */
 &mac {
 	status = "disabled";
 };
@@ -244,7 +244,33 @@
 	status = "disabled";
 };
 
+/* Disable USB — no connector on flight board */
+&usb {
+	status = "disabled";
+};
+
+&usb_ctrl_mod {
+	status = "disabled";
+};
+
+&usb0_phy {
+	status = "disabled";
+};
+
+&usb1_phy {
+	status = "disabled";
+};
+
+&usb0 {
+	status = "disabled";
+};
+
+&usb1 {
+	status = "disabled";
+};
+
 /* Disable McASP audio to release Ball B12 (0x1a0) on P9.42 */
 &mcasp0 {
 	status = "disabled";
 };
+

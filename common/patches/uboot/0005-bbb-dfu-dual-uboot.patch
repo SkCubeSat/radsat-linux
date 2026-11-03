@@ -1,0 +1,79 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Fri, 30 Oct 2026 17:30:00 -0600
+Subject: [PATCH] arm: am33xx: dual U-Boot DFU alts on boot MMC0
+
+DFU on mmc0 with u-boot.img + u-boot-bak.img; map FIT uboot* names.
+
+---
+--- a/include/configs/beaglebone-black.h
++++ b/include/configs/beaglebone-black.h
+@@ -69,11 +69,12 @@
+ 
+ /* DFU Configuration */
+ #define DFU_ALT_INFO_MMC \
+-    "dfu_alt_info_mmc="         \
+-    "kernel fat 1 1;"       \
+-    "rootfs part 1 2;" \
+-    "uboot fat 1 1;" \
+-    "beaglebone-black.dtb fat 1 1" \
++    "dfu_alt_info_mmc=" \
++    "kernel fat 0 1;" \
++    "rootfs part 0 2;" \
++    "u-boot.img fat 0 1;" \
++    "u-boot-bak.img fat 0 1;" \
++    "beaglebone-black.dtb fat 0 1" \
+     "\0"
+ 
+ #define DFU_ALT_INFO_NOR ""
+--- a/common/update_kubos.c
++++ b/common/update_kubos.c
+@@ -29,6 +29,35 @@
+ #define PART_ENVAR         "kubos_updatepart"
+ #define LOAD_ENVAR         "kubos_loadaddr"
+ 
++
++/*
++ * Map FIT image node names onto dfu_alt_info_mmc entity names (FAT filenames).
++ * Strips trailing @unit (kernel@1 -> kernel). Maps uboot* onto u-boot*.img.
++ */
++static void kubos_fit_to_dfu_name(const char *fit_name, char *out, size_t outlen)
++{
++	char base[64];
++	const char *at;
++	size_t n;
++
++	if (!fit_name || !out || outlen == 0)
++		return;
++
++	at = strchr(fit_name, '@');
++	n = at ? (size_t)(at - fit_name) : strlen(fit_name);
++	if (n >= sizeof(base))
++		n = sizeof(base) - 1;
++	memcpy(base, fit_name, n);
++	base[n] = '\0';
++
++	if (!strcmp(base, "uboot"))
++		snprintf(out, outlen, "u-boot.img");
++	else if (!strcmp(base, "uboot-bak"))
++		snprintf(out, outlen, "u-boot-bak.img");
++	else
++		snprintf(out, outlen, "%s", base);
++}
++
+ int update_kubos_count(void)
+ {
+ 
+@@ -157,7 +186,11 @@
+ 
+         if (fit_image_check_type(fit, noffset,
+                         IH_TYPE_FIRMWARE)) {
+-            ret = dfu_tftp_write(fit_image_name, (unsigned int) data_addr,
++            char dfu_name[64];
++
++            kubos_fit_to_dfu_name(fit_image_name, dfu_name, sizeof(dfu_name));
++            printf(" -> DFU '%s'", dfu_name);
++            ret = dfu_tftp_write(dfu_name, (unsigned int) data_addr,
+                          update_size, "mmc", dev_num);
+             if (ret) {
+                 return ret;

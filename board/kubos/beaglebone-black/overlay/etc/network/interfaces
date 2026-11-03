@@ -1,14 +1,10 @@
 auto lo
 iface lo inet loopback
 
-# Default ethernet configuration
-# Update the 'address' value to set a custom static IP
-auto eth0
-iface eth0 inet static
-	address 10.0.2.20
-	netmask 255.255.255.0
+# No eth0 — flight board has no Ethernet PHY/connector.
+# No can1 — only one CAN bus on this build.
 
-# Default SLIP configuration
+# SLIP over UART (ttyS5) for serial IP when needed
 auto sl0
 iface sl0 inet static
         address 192.168.0.2
@@ -21,10 +17,4 @@ auto can0
 iface can0 inet manual
     pre-up /sbin/ip link set $IFACE down
     up /sbin/ip link set $IFACE up type can bitrate 1000000
-    down /sbin/ip link set $IFACE down
-
-auto can1
-iface can1 inet manual
-    pre-up /sbin/ip link set $IFACE type can bitrate 500000
-    up /sbin/ip link set $IFACE up
     down /sbin/ip link set $IFACE down

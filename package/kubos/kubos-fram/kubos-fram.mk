@@ -29,7 +29,8 @@ define FRAM_INSTALL_STAGING_CMDS
 	echo 'address_width_bytes = ${BR2_KUBOS_FRAM_ADDRESS_WIDTH_BYTES}' >> $(KUBOS_CONFIG_FRAGMENT_DIR)/fram-service
 	echo 'max_transfer_bytes = ${BR2_KUBOS_FRAM_MAX_TRANSFER_BYTES}' >> $(KUBOS_CONFIG_FRAGMENT_DIR)/fram-service
 	echo 'fw_printenv = ${BR2_KUBOS_FRAM_FW_PRINTENV}' >> $(KUBOS_CONFIG_FRAGMENT_DIR)/fram-service
-	echo -e 'fw_setenv = ${BR2_KUBOS_FRAM_FW_SETENV}\n' >> $(KUBOS_CONFIG_FRAGMENT_DIR)/fram-service
+	echo 'fw_setenv = ${BR2_KUBOS_FRAM_FW_SETENV}' >> $(KUBOS_CONFIG_FRAGMENT_DIR)/fram-service
+	echo -e 'reconcile_on_start = true\n' >> $(KUBOS_CONFIG_FRAGMENT_DIR)/fram-service
 endef
 
 # Install the application into the rootfs file system

@@ -3,10 +3,26 @@
 # Early userspace banner: which media/partition the rootfs is on.
 # SD cards may carry multiple image copies, so the partition number matters.
 #
+set +e
+
+basename() {
+	_b=$1
+	_b=${_b%/}
+	[ -n "$_b" ] || { echo "/"; return 0; }
+	echo "${_b##*/}"
+}
+
+# MBR disk signature at offset 440 as little-endian 8 hex digits (PARTUUID prefix).
+mbr_sig_le() {
+	_raw=$(dd if="$1" bs=1 skip=440 count=4 2>/dev/null | hexdump -v -e '1/1 "%02x"')
+	# bytes ABCD on disk (LE) → print DCBA as hex string
+	echo "$_raw" | sed -n 's/^\(..\)\(..\)\(..\)\(..\)$/\4\3\2\1/p'
+}
 
 root_src=$(awk '$2 == "/" { print $1; exit }' /proc/mounts)
 cmdline_root=""
 partuuid=""
+resolved=""
 
 if [ -r /proc/cmdline ]; then
 	cmdline_root=$(sed -n 's/.*root=\([^ ]*\).*/\1/p' /proc/cmdline)
@@ -17,13 +33,27 @@ if [ -r /proc/cmdline ]; then
 	esac
 fi
 
-# Prefer resolving PARTUUID to the real block device (BusyBox findfs if present).
+# Resolve PARTUUID=SSSSSSSS-PP via on-disk MBR signature (BusyBox often has no findfs).
 if [ -n "$partuuid" ]; then
 	if command -v findfs >/dev/null 2>&1; then
-		resolved=$(findfs "PARTUUID=$partuuid" 2>/dev/null) || resolved=""
+		resolved=$(findfs "PARTUUID=$partuuid" 2>/dev/null)
 		[ -n "$resolved" ] && root_src=$resolved
-	elif [ -e "/dev/disk/by-partuuid/$partuuid" ]; then
-		root_src=$(readlink -f "/dev/disk/by-partuuid/$partuuid" 2>/dev/null || echo "/dev/disk/by-partuuid/$partuuid")
+	fi
+	if [ -z "$resolved" ] || [ "$root_src" = "/dev/root" ]; then
+		sig_hex=$(echo "$partuuid" | sed 's/-.*//' | tr 'A-F' 'a-f')
+		part_n=${partuuid#*-}
+		part_n=$((0x${part_n}))
+		for b in /sys/block/mmcblk*; do
+			[ -d "$b" ] || continue
+			d=$(basename "$b")
+			case "$d" in
+				*boot*|*rpmb*) continue ;;
+			esac
+			raw=$(mbr_sig_le "/dev/$d")
+			[ "$raw" = "$sig_hex" ] || continue
+			root_src="/dev/${d}p${part_n}"
+			break
+		done
 	fi
 fi
 

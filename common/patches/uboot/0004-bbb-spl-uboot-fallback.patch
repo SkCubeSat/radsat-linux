@@ -1,0 +1,24 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Fri, 30 Oct 2026 17:30:00 -0600
+Subject: [PATCH] spl: mmc: fall back to u-boot-bak.img on FAT boot
+
+If primary u-boot.img fails to load/validate, try u-boot-bak.img.
+
+---
+--- a/common/spl/spl_mmc.c
++++ b/common/spl/spl_mmc.c
+@@ -236,6 +236,13 @@
+ 				 CONFIG_SPL_FS_LOAD_PAYLOAD_NAME);
+ 	if (!err)
+ 		return err;
++	/* Primary payload bad/missing: try redundant copy on same FAT. */
++	puts("SPL: primary u-boot load failed, trying u-boot-bak.img\n");
++	err = spl_load_image_fat(mmc_get_blk_desc(mmc),
++				 CONFIG_SYS_MMCSD_FS_BOOT_PARTITION,
++				 "u-boot-bak.img");
++	if (!err)
++		return err;
+ #endif
+ #endif
+ #ifdef CONFIG_SPL_EXT_SUPPORT

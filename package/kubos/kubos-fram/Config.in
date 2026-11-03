@@ -9,12 +9,13 @@ if BR2_PACKAGE_KUBOS_FRAM
 
 config BR2_KUBOS_FRAM_INIT_LVL
     int "Service Run Level"
-    default 90
+    default 80
     range 10 99
     depends on BR2_PACKAGE_KUBOS_FRAM
     help
         The initialization priority level of the RADSAT FRAM Service.
         The lower the number, the earlier the service is initialized.
+        Keep this earlier than MRAM so boot flags are available first.
 
 config BR2_KUBOS_FRAM_RESTART_COUNT
     int "Service Restart Limit"

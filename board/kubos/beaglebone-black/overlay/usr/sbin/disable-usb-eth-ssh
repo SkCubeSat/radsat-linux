@@ -1,0 +1,62 @@
+#!/bin/sh
+# Live (no-reflash) trim: stop SSH, drop eth0/can1 from interfaces, quiet USB host.
+# Safe to re-run. Does not rebuild the kernel — CPSW/MUSB stay linked until next image.
+set -e
+mount -o remount,rw / 2>/dev/null || true
+
+# --- SSH ---
+killall dropbear 2>/dev/null || true
+if [ -f /etc/init.d/S50dropbear ]; then
+	cat > /etc/init.d/S50dropbear <<'EOF'
+#!/bin/sh
+case "$1" in start|stop|restart|reload) exit 0 ;; *) echo "Usage: $0 {start|stop|restart}"; exit 1 ;; esac
+EOF
+	chmod +x /etc/init.d/S50dropbear
+fi
+rm -f /usr/sbin/dropbear /usr/bin/dbclient /usr/bin/ssh /usr/bin/scp 2>/dev/null || true
+
+# --- network interfaces: no eth0/can1 (keep can0 + SLIP) ---
+cat > /etc/network/interfaces <<'EOF'
+auto lo
+iface lo inet loopback
+
+auto sl0
+iface sl0 inet static
+        address 192.168.0.2
+        netmask 255.255.255.0
+        pointopoint 192.168.0.1
+        pre-up slattach -s 115200 -p cslip /dev/ttyS5 &
+        post-up route add 192.168.0.2 dev lo
+
+auto can0
+iface can0 inet manual
+    pre-up /sbin/ip link set $IFACE down
+    up /sbin/ip link set $IFACE up type can bitrate 1000000
+    down /sbin/ip link set $IFACE down
+EOF
+
+# Bring down unused interfaces if present
+ip link set eth0 down 2>/dev/null || true
+ip link set can1 down 2>/dev/null || true
+
+# ADCS must track the only CAN bus (can0 @ 1M)
+if [ -f /etc/kubos-config.toml ]; then
+	sed -i 's/^can_interface *=.*/can_interface = "can0"/' /etc/kubos-config.toml
+	sed -i 's/^can_bitrate *=.*/can_bitrate = 1000000/' /etc/kubos-config.toml
+fi
+
+# --- quiet USB host (built-in drivers; unbind stops VBUS spam) ---
+for d in /sys/bus/platform/drivers/musb-hdrc /sys/bus/platform/drivers/ehci-omap; do
+	[ -d "$d" ] || continue
+	for dev in "$d"/*; do
+		base=$(basename "$dev")
+		case "$base" in
+			bind|unbind|uevent|module) ;;
+			*) echo "$base" > "$d/unbind" 2>/dev/null || true ;;
+		esac
+	done
+done
+
+sync
+echo "disable-usb-eth-ssh: done (SSH off, eth0/can1 removed, USB host unbound)"
+echo "Kernel still has CPSW/MUSB code until next image flash."

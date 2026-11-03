@@ -1,0 +1,123 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Sun, 1 Nov 2026 18:10:00 -0600
+Subject: [PATCH] arm: bbb: fail-open SPI MRAM env (do not hang after MMC)
+
+Disable SPI MRAM load/save at boot until McSPI xfers are hardened.
+Fall back to EXT4 /uboot.env (mmc0:3 and mmc1:3) then defaults.
+
+---
+--- a/common/env_mram.c
++++ b/common/env_mram.c
+@@ -1,9 +1,9 @@
+ /*
+  * SPI MRAM environment storage for RadSat (MR2xH40 protocol).
+  *
+- * Loads/saves the classic U-Boot env blob from a reserved high region on
+- * McSPI2 CS0 (Linux /dev/spidev1.0). Falls back to EXT4 /uboot.env when the
+- * MRAM CRC is invalid or SPI is unavailable.
++ * Boot path is fail-open: SPI MRAM load/save is skipped until the McSPI
++ * transfer path is hardened (full-size xfers can wedge with no timeout).
++ * Relocate uses EXT4 /uboot.env then compiled-in defaults.
+  *
+  * SPDX-License-Identifier:	GPL-2.0+
+  */
+@@ -37,6 +37,11 @@
+ # define CONFIG_ENV_MRAM_OFFSET	0x7D800	/* capacity 0x80000 - 0x2800 */
+ #endif
+ 
++/* Set to 1 only after SPI xfer is proven not to hang on this board. */
++#ifndef CONFIG_ENV_MRAM_SPI_ENABLE
++# define CONFIG_ENV_MRAM_SPI_ENABLE	0
++#endif
++
+ #define MRAM_CMD_WREN	0x06
+ #define MRAM_CMD_READ	0x03
+ #define MRAM_CMD_WRITE	0x02
+@@ -52,6 +57,7 @@
+ 	return 0;
+ }
+ 
++#if CONFIG_ENV_MRAM_SPI_ENABLE
+ static int mram_xfer(struct spi_slave *slave, void *buf, unsigned int len)
+ {
+ 	int ret;
+@@ -110,8 +116,9 @@
+ 	free(frame);
+ 	return ret;
+ }
+-
+-static int env_import_ext4_fallback(void)
++#endif /* CONFIG_ENV_MRAM_SPI_ENABLE */
++
++static int env_import_ext4_one(const char *dev_part)
+ {
+ 	ALLOC_CACHE_ALIGN_BUFFER(char, buf, CONFIG_ENV_SIZE);
+ 	struct blk_desc *dev_desc = NULL;
+@@ -119,8 +126,7 @@
+ 	int part, err;
+ 	loff_t off;
+ 
+-	part = blk_get_device_part_str(EXT4_ENV_INTERFACE,
+-					EXT4_ENV_DEVICE_AND_PART,
++	part = blk_get_device_part_str(EXT4_ENV_INTERFACE, (char *)dev_part,
+ 					&dev_desc, &info, 1);
+ 	if (part < 0)
+ 		return -ENODEV;
+@@ -137,9 +143,29 @@
+ 	return env_import(buf, 1);
+ }
+ 
++static int env_import_ext4_fallback(void)
++{
++	/* SD boot uses mmc0; eMMC-only boot uses mmc1. Try both. */
++	static const char *const parts[] = {
++		EXT4_ENV_DEVICE_AND_PART,
++		"0:3",
++		"1:3",
++		NULL
++	};
++	int i, ret;
++
++	for (i = 0; parts[i]; i++) {
++		ret = env_import_ext4_one(parts[i]);
++		if (!ret)
++			return 0;
++	}
++	return -ENODEV;
++}
++
+ #ifdef CONFIG_CMD_SAVEENV
+ int saveenv(void)
+ {
++#if CONFIG_ENV_MRAM_SPI_ENABLE
+ 	env_t env_new;
+ 	struct spi_slave *slave;
+ 	int ret;
+@@ -165,11 +191,16 @@
+ 	}
+ 	puts("OK\n");
+ 	return 0;
++#else
++	puts("MRAM: saveenv skipped (SPI disabled; use Linux fw_setenv)\n");
++	return 1;
++#endif
+ }
+ #endif
+ 
+ void env_relocate_spec(void)
+ {
++#if CONFIG_ENV_MRAM_SPI_ENABLE
+ 	ALLOC_CACHE_ALIGN_BUFFER(char, buf, CONFIG_ENV_SIZE);
+ 	struct spi_slave *slave;
+ 	int ret;
+@@ -188,6 +219,9 @@
+ 	} else {
+ 		puts("Env: MRAM SPI unavailable, trying EXT4\n");
+ 	}
++#else
++	puts("Env: SPI MRAM load disabled (fail-open), trying EXT4\n");
++#endif
+ 
+ 	if (!env_import_ext4_fallback()) {
+ 		puts("Env: loaded from EXT4 fallback\n");

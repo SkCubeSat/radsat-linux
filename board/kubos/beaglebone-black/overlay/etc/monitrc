@@ -11,7 +11,7 @@ SET PIDFILE /var/run/monit.pid
 # services which previously failed too many times after a system reboot
 SET STATEFILE /tmp/monit.state
 
-# Set up our log file
+# /var/log is ensured by /sbin/ensure-system-log before monit starts
 SET LOGFILE /var/log/monit.log
 CHECK FILE monit PATH /var/log/monit.log
     IF SIZE > 1 MB THEN EXEC "/home/system/kubos/log-rotate.sh monit.log"
@@ -23,5 +23,5 @@ SET HTTPD PORT 7000
 # Include all other Kubos Monit configuration files
 INCLUDE /etc/monit.d/*.cfg
 
-# Include all other user Monit configuration files
-INCLUDE /home/system/etc/monit.d/*.cfg
+# Optional user overlays (created empty by ensure-system-log)
+#INCLUDE /home/system/etc/monit.d/*.cfg

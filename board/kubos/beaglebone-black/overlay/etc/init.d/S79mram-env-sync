@@ -1,0 +1,29 @@
+#!/bin/sh
+#
+# S79mram-env-sync — Mirror CRC-valid U-Boot env from SPI MRAM to /envar/uboot.env
+# so fw_printenv/fw_setenv keep working. Runs before fram-service (S80).
+#
+
+ENVAR_FILE="/envar/uboot.env"
+SYNC="/usr/sbin/mram-env-sync"
+
+case "$1" in
+  start)
+    mkdir -p /run/lock /envar
+    chmod 1777 /run/lock 2>/dev/null || true
+    if [ -x "$SYNC" ]; then
+      echo "S79mram-env-sync: syncing MRAM env -> ${ENVAR_FILE}"
+      "$SYNC" --backend spidev --device /dev/spidev1.0 --out "$ENVAR_FILE" || true
+    else
+      echo "S79mram-env-sync: ${SYNC} missing; leaving ${ENVAR_FILE}"
+    fi
+    ;;
+  stop)
+    ;;
+  *)
+    echo "Usage: $0 {start|stop}"
+    exit 1
+    ;;
+esac
+
+exit 0

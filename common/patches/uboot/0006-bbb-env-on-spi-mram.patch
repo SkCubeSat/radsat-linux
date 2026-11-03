@@ -1,0 +1,402 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Fri, 30 Oct 2026 18:00:00 -0600
+Subject: [PATCH] arm: bbb: load/save U-Boot env from SPI MRAM
+
+Store the classic env blob in the high 0x2800 bytes of McSPI2 MRAM
+(Linux spidev1.0). Fall back to EXT4 /uboot.env, then defaults.
+
+---
+diff --git a/common/env_mram.c b/common/env_mram.c
+new file mode 100644
+--- /dev/null
++++ b/common/env_mram.c
+@@ -0,0 +1,199 @@
++/*
++ * SPI MRAM environment storage for RadSat (MR2xH40 protocol).
++ *
++ * Loads/saves the classic U-Boot env blob from a reserved high region on
++ * McSPI2 CS0 (Linux /dev/spidev1.0). Falls back to EXT4 /uboot.env when the
++ * MRAM CRC is invalid or SPI is unavailable.
++ *
++ * SPDX-License-Identifier:	GPL-2.0+
++ */
++
++#include <common.h>
++#include <command.h>
++#include <environment.h>
++#include <errno.h>
++#include <malloc.h>
++#include <memalign.h>
++#include <search.h>
++#include <spi.h>
++#include <ext4fs.h>
++#include <mmc.h>
++
++DECLARE_GLOBAL_DATA_PTR;
++
++#ifndef CONFIG_ENV_MRAM_BUS
++# define CONFIG_ENV_MRAM_BUS	1	/* McSPI2 == Linux spi1 */
++#endif
++#ifndef CONFIG_ENV_MRAM_CS
++# define CONFIG_ENV_MRAM_CS	0
++#endif
++#ifndef CONFIG_ENV_MRAM_MAX_HZ
++# define CONFIG_ENV_MRAM_MAX_HZ	10000000
++#endif
++#ifndef CONFIG_ENV_MRAM_MODE
++# define CONFIG_ENV_MRAM_MODE	SPI_MODE_0
++#endif
++#ifndef CONFIG_ENV_MRAM_OFFSET
++# define CONFIG_ENV_MRAM_OFFSET	0x7D800	/* capacity 0x80000 - 0x2800 */
++#endif
++
++#define MRAM_CMD_WREN	0x06
++#define MRAM_CMD_READ	0x03
++#define MRAM_CMD_WRITE	0x02
++
++char *env_name_spec = "SPI MRAM";
++
++env_t *env_ptr;
++
++int env_init(void)
++{
++	gd->env_addr = (ulong)&default_environment[0];
++	gd->env_valid = 1;
++	return 0;
++}
++
++static int mram_xfer(struct spi_slave *slave, void *buf, unsigned int len)
++{
++	int ret;
++
++	ret = spi_claim_bus(slave);
++	if (ret)
++		return ret;
++	ret = spi_xfer(slave, len * 8, buf, buf,
++		       SPI_XFER_BEGIN | SPI_XFER_END);
++	spi_release_bus(slave);
++	return ret;
++}
++
++static int mram_read(struct spi_slave *slave, u32 offset, void *buf, u32 len)
++{
++	u8 *frame;
++	int ret;
++
++	frame = malloc(4 + len);
++	if (!frame)
++		return -ENOMEM;
++	frame[0] = MRAM_CMD_READ;
++	frame[1] = (offset >> 16) & 0xff;
++	frame[2] = (offset >> 8) & 0xff;
++	frame[3] = offset & 0xff;
++	memset(frame + 4, 0, len);
++
++	ret = mram_xfer(slave, frame, 4 + len);
++	if (!ret)
++		memcpy(buf, frame + 4, len);
++	free(frame);
++	return ret;
++}
++
++static int mram_write(struct spi_slave *slave, u32 offset, const void *buf,
++		      u32 len)
++{
++	u8 wren = MRAM_CMD_WREN;
++	u8 *frame;
++	int ret;
++
++	ret = mram_xfer(slave, &wren, 1);
++	if (ret)
++		return ret;
++
++	frame = malloc(4 + len);
++	if (!frame)
++		return -ENOMEM;
++	frame[0] = MRAM_CMD_WRITE;
++	frame[1] = (offset >> 16) & 0xff;
++	frame[2] = (offset >> 8) & 0xff;
++	frame[3] = offset & 0xff;
++	memcpy(frame + 4, buf, len);
++
++	ret = mram_xfer(slave, frame, 4 + len);
++	free(frame);
++	return ret;
++}
++
++static int env_import_ext4_fallback(void)
++{
++	ALLOC_CACHE_ALIGN_BUFFER(char, buf, CONFIG_ENV_SIZE);
++	struct blk_desc *dev_desc = NULL;
++	disk_partition_t info;
++	int part, err;
++	loff_t off;
++
++	part = blk_get_device_part_str(EXT4_ENV_INTERFACE,
++					EXT4_ENV_DEVICE_AND_PART,
++					&dev_desc, &info, 1);
++	if (part < 0)
++		return -ENODEV;
++
++	ext4fs_set_blk_dev(dev_desc, &info);
++	if (!ext4fs_mount(info.size))
++		return -ENODEV;
++
++	err = ext4_read_file(EXT4_ENV_FILE, buf, 0, CONFIG_ENV_SIZE, &off);
++	ext4fs_close();
++	if (err == -1)
++		return -EIO;
++
++	return env_import(buf, 1);
++}
++
++#ifdef CONFIG_CMD_SAVEENV
++int saveenv(void)
++{
++	env_t env_new;
++	struct spi_slave *slave;
++	int ret;
++
++	ret = env_export(&env_new);
++	if (ret)
++		return ret;
++
++	slave = spi_setup_slave(CONFIG_ENV_MRAM_BUS, CONFIG_ENV_MRAM_CS,
++				CONFIG_ENV_MRAM_MAX_HZ, CONFIG_ENV_MRAM_MODE);
++	if (!slave) {
++		puts("MRAM: spi_setup_slave failed\n");
++		return 1;
++	}
++
++	puts("Writing env to SPI MRAM...");
++	ret = mram_write(slave, CONFIG_ENV_MRAM_OFFSET, &env_new,
++			 CONFIG_ENV_SIZE);
++	spi_free_slave(slave);
++	if (ret) {
++		printf("FAILED (%d)\n", ret);
++		return 1;
++	}
++	puts("OK\n");
++	return 0;
++}
++#endif
++
++void env_relocate_spec(void)
++{
++	ALLOC_CACHE_ALIGN_BUFFER(char, buf, CONFIG_ENV_SIZE);
++	struct spi_slave *slave;
++	int ret;
++
++	slave = spi_setup_slave(CONFIG_ENV_MRAM_BUS, CONFIG_ENV_MRAM_CS,
++				CONFIG_ENV_MRAM_MAX_HZ, CONFIG_ENV_MRAM_MODE);
++	if (slave) {
++		ret = mram_read(slave, CONFIG_ENV_MRAM_OFFSET, buf,
++				CONFIG_ENV_SIZE);
++		spi_free_slave(slave);
++		if (!ret && !env_import(buf, 1)) {
++			puts("Env: loaded from SPI MRAM\n");
++			return;
++		}
++		puts("Env: MRAM CRC/import failed, trying EXT4\n");
++	} else {
++		puts("Env: MRAM SPI unavailable, trying EXT4\n");
++	}
++
++	if (!env_import_ext4_fallback()) {
++		puts("Env: loaded from EXT4 fallback\n");
++		return;
++	}
++
++	puts("Env: using compiled-in defaults\n");
++	set_default_env(NULL);
++}
+diff --git a/common/Makefile b/common/Makefile
+--- a/common/Makefile
++++ b/common/Makefile
+@@ -43,6 +43,8 @@
+ obj-$(CONFIG_ENV_IS_IN_MMC) += env_mmc.o
+ obj-$(CONFIG_ENV_IS_IN_FAT) += env_fat.o
+ obj-$(CONFIG_ENV_IS_IN_EXT4) += env_ext4.o
++obj-$(CONFIG_ENV_IS_IN_MRAM) += env_mram.o
++obj-$(CONFIG_RADSAT_FRAM_POLICY) += fram_mission.o
+ obj-$(CONFIG_ENV_IS_IN_NAND) += env_nand.o
+ obj-$(CONFIG_ENV_IS_IN_NVRAM) += env_nvram.o
+ obj-$(CONFIG_ENV_IS_IN_ONENAND) += env_onenand.o
+@@ -114,6 +116,8 @@
+ obj-$(CONFIG_ENV_IS_IN_MMC) += env_mmc.o
+ obj-$(CONFIG_ENV_IS_IN_FAT) += env_fat.o
+ obj-$(CONFIG_ENV_IS_IN_EXT4) += env_ext4.o
++obj-$(CONFIG_ENV_IS_IN_MRAM) += env_mram.o
++obj-$(CONFIG_RADSAT_FRAM_POLICY) += fram_mission.o
+ obj-$(CONFIG_ENV_IS_IN_NAND) += env_nand.o
+ obj-$(CONFIG_ENV_IS_IN_SPI_FLASH) += env_sf.o
+ obj-$(CONFIG_ENV_IS_IN_FLASH) += env_flash.o
+diff --git a/include/configs/beaglebone-black.h b/include/configs/beaglebone-black.h
+--- a/include/configs/beaglebone-black.h
++++ b/include/configs/beaglebone-black.h
+@@ -43,19 +43,28 @@
+ #define CONFIG_SYS_BAUDRATE_TABLE \
+     { 9600, 19200, 38400, 57600, 115200 }
+ 
+-/* If we're compiling for the SPL, we don't have an env area */
+-#if defined(CONFIG_SPL_BUILD) && defined(CONFIG_SPL_USBETH_SUPPORT)
++#define CONFIG_ENV_SIZE			(10 * 1024)
++/* SPL has no SPI MRAM env driver; U-Boot proper owns MRAM/FRAM. */
++#ifdef CONFIG_SPL_BUILD
+ #define CONFIG_ENV_IS_NOWHERE
+ #else
+-/* Otherwise, it's in an ext4 partition */
+-#ifdef CONFIG_CMD_EXT4
++/*
++ * Primary env: SPI MRAM high region (see mram-service env_offset/env_size).
++ * EXT4 /uboot.env remains a load fallback inside env_mram.c.
++ */
++#define CONFIG_ENV_IS_IN_MRAM		1
++#define CONFIG_ENV_MRAM_BUS		1
++#define CONFIG_ENV_MRAM_CS		0
++#define CONFIG_ENV_MRAM_MAX_HZ		10000000
++#define CONFIG_ENV_MRAM_MODE		0
++#define CONFIG_ENV_MRAM_OFFSET		0x7D800
+ #define CONFIG_EXT4_WRITE
+-#define CONFIG_ENV_IS_IN_EXT4    1
+-#define EXT4_ENV_INTERFACE       "mmc"
+-#define EXT4_ENV_DEVICE_AND_PART "0:3"
+-#define EXT4_ENV_FILE            "/uboot.env"
+-#define CONFIG_ENV_SIZE         10 * 1024 /* Assume sector size of 1024 */
+-#endif
++#define EXT4_ENV_INTERFACE		"mmc"
++#define EXT4_ENV_DEVICE_AND_PART	"0:3"
++#define EXT4_ENV_FILE			"/uboot.env"
++#define CONFIG_RADSAT_FRAM_POLICY	1
++#define CONFIG_FRAM_I2C_BUS		2
++#define CONFIG_FRAM_I2C_ADDR		0x50
+ #endif /* CONFIG_SPL_BUILD */
+ 
+ /* File updates */
+diff --git a/include/environment.h b/include/environment.h
+--- a/include/environment.h
++++ b/include/environment.h
+@@ -109,7 +109,8 @@
+ # if	!defined(CONFIG_ENV_IS_IN_FLASH)	&& \
+ 	!defined(CONFIG_ENV_IS_IN_NAND)		&& \
+ 	!defined(CONFIG_ENV_IS_IN_ONENAND)	&& \
+-	!defined(CONFIG_ENV_IS_IN_SPI_FLASH)
++	!defined(CONFIG_ENV_IS_IN_SPI_FLASH) && \
++	!defined(CONFIG_ENV_IS_IN_MRAM)
+ #  error "CONFIG_ENV_IS_EMBEDDED not supported for your flash type"
+ # endif
+ #endif
+diff --git a/board/ti/am335x/mux.c b/board/ti/am335x/mux.c
+--- a/board/ti/am335x/mux.c
++++ b/board/ti/am335x/mux.c
+@@ -120,6 +120,21 @@
+ 	{-1},
+ };
+ 
++
++static struct module_pin_mux spi1_pin_mux[] = {
++	{OFFSET(mcasp0_aclkx), (MODE(3) | RXACTIVE | PULLUDEN)},	/* SPI1_SCLK */
++	{OFFSET(mcasp0_fsx), (MODE(3) | RXACTIVE | PULLUDEN | PULLUP_EN)}, /* SPI1_D0 */
++	{OFFSET(mcasp0_axr0), (MODE(3) | RXACTIVE | PULLUDEN)},	/* SPI1_D1 */
++	{OFFSET(mcasp0_ahclkr), (MODE(3) | RXACTIVE | PULLUDEN | PULLUP_EN)}, /* SPI1_CS0 */
++	{-1},
++};
++
++static struct module_pin_mux i2c2_pin_mux[] = {
++	{OFFSET(uart1_ctsn), (MODE(3) | RXACTIVE | PULLUDEN | PULLUP_EN)}, /* I2C2_SDA */
++	{OFFSET(uart1_rtsn), (MODE(3) | RXACTIVE | PULLUDEN | PULLUP_EN)}, /* I2C2_SCL */
++	{-1},
++};
++
+ static struct module_pin_mux spi0_pin_mux[] = {
+ 	{OFFSET(spi0_sclk), (MODE(0) | RXACTIVE | PULLUDEN)},	/* SPI0_SCLK */
+ 	{OFFSET(spi0_d0), (MODE(0) | RXACTIVE |
+@@ -299,6 +314,16 @@
+ 	configure_module_pin_mux(uart5_pin_mux);
+ }
+ 
++void enable_spi1_pin_mux(void)
++{
++	configure_module_pin_mux(spi1_pin_mux);
++}
++
++void enable_i2c2_pin_mux(void)
++{
++	configure_module_pin_mux(i2c2_pin_mux);
++}
++
+ void enable_i2c0_pin_mux(void)
+ {
+ 	configure_module_pin_mux(i2c0_pin_mux);
+diff --git a/board/ti/am335x/board.h b/board/ti/am335x/board.h
+--- a/board/ti/am335x/board.h
++++ b/board/ti/am335x/board.h
+@@ -66,5 +66,7 @@
+ void enable_uart4_pin_mux(void);
+ void enable_uart5_pin_mux(void);
+ void enable_i2c0_pin_mux(void);
++void enable_spi1_pin_mux(void);
++void enable_i2c2_pin_mux(void);
+ void enable_board_pin_mux(void);
+ #endif
+diff --git a/board/ti/am335x/board.c b/board/ti/am335x/board.c
+--- a/board/ti/am335x/board.c
++++ b/board/ti/am335x/board.c
+@@ -380,6 +380,8 @@
+ const struct dpll_params *get_dpll_ddr_params(void)
+ {
+ 	enable_i2c0_pin_mux();
++	enable_i2c2_pin_mux();
++	enable_spi1_pin_mux();
+ 	i2c_init(CONFIG_SYS_OMAP24_I2C_SPEED, CONFIG_SYS_OMAP24_I2C_SLAVE);
+ 	if (read_eeprom() < 0)
+ 		puts("Could not get board ID.\n");
+diff --git a/scripts/config_whitelist.txt b/scripts/config_whitelist.txt
+--- a/scripts/config_whitelist.txt
++++ b/scripts/config_whitelist.txt
+@@ -1082,6 +1082,11 @@
+ CONFIG_ENV_IS_NOWHERE
+ CONFIG_ENV_MAX_ENTRIES
+ CONFIG_ENV_MIN_ENTRIES
++CONFIG_ENV_MRAM_BUS
++CONFIG_ENV_MRAM_CS
++CONFIG_ENV_MRAM_MAX_HZ
++CONFIG_ENV_MRAM_MODE
++CONFIG_ENV_MRAM_OFFSET
+ CONFIG_ENV_OFFSET
+ CONFIG_ENV_OFFSET_OOB
+ CONFIG_ENV_OFFSET_REDUND
+@@ -1269,6 +1274,8 @@
+ CONFIG_FPGA_STRATIX_V
+ CONFIG_FPGA_XILINX
+ CONFIG_FPGA_ZYNQPL
++CONFIG_FRAM_I2C_ADDR
++CONFIG_FRAM_I2C_BUS
+ CONFIG_FSLDMAFEC
+ CONFIG_FSL_CADMUS
+ CONFIG_FSL_CORENET
+@@ -3792,6 +3799,7 @@
+ CONFIG_R8A7792
+ CONFIG_R8A7793
+ CONFIG_R8A7794
++CONFIG_RADSAT_FRAM_POLICY
+ CONFIG_RAINIER
+ CONFIG_RAMBOOT
+ CONFIG_RAMBOOTCOMMAND
+diff --git a/cmd/nvedit.c b/cmd/nvedit.c
+--- a/cmd/nvedit.c
++++ b/cmd/nvedit.c
+@@ -53,9 +53,10 @@
+ 	!defined(CONFIG_ENV_IS_IN_SPI_FLASH)	&& \
+ 	!defined(CONFIG_ENV_IS_IN_REMOTE)	&& \
+ 	!defined(CONFIG_ENV_IS_IN_UBI)		&& \
++	!defined(CONFIG_ENV_IS_IN_MRAM)	&& \
+ 	!defined(CONFIG_ENV_IS_NOWHERE)
+ # error Define one of CONFIG_ENV_IS_IN_{EEPROM|FLASH|DATAFLASH|ONENAND|\
+-SATA|SPI_FLASH|NVRAM|MMC|FAT|EXT4|REMOTE|UBI} or CONFIG_ENV_IS_NOWHERE
++SATA|SPI_FLASH|NVRAM|MMC|FAT|EXT4|REMOTE|UBI|MRAM} or CONFIG_ENV_IS_NOWHERE
+ #endif
+ 
+ /*
+

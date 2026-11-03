@@ -1,0 +1,49 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Sun, 2 Nov 2026 17:00:00 -0600
+Subject: [PATCH] arm: am33xx: skip USB init when MUSB is disabled
+
+Flight boards have no USB connector. Kconfig turns off CONFIG_USB /
+MUSB, but am335x_evm.h still defines CONFIG_AM335X_USB0/1, so
+arch_misc_init() references musb platform data that was ifdeffed out.
+
+Guard the USB header block and arch_misc_init registration on MUSB.
+
+---
+--- a/arch/arm/cpu/armv7/am33xx/board.c	2026-11-02 17:33:53.160995320 -0600
++++ b/arch/arm/cpu/armv7/am33xx/board.c	2026-11-02 17:33:53.189958531 -0600
+@@ -187,6 +187,8 @@
+ 
+ int arch_misc_init(void)
+ {
++#if (defined(CONFIG_USB_MUSB_GADGET) || defined(CONFIG_USB_MUSB_HOST)) && \
++	(defined(CONFIG_AM335X_USB0) || defined(CONFIG_AM335X_USB1))
+ #ifdef CONFIG_AM335X_USB0
+ 	musb_register(&otg0_plat, &otg0_board_data,
+ 		(void *)USB0_OTG_BASE);
+@@ -195,6 +197,7 @@
+ 	musb_register(&otg1_plat, &otg1_board_data,
+ 		(void *)USB1_OTG_BASE);
+ #endif
++#endif
+ 	return 0;
+ }
+ 
+--- a/include/configs/am335x_evm.h	2026-11-02 17:33:53.161280046 -0600
++++ b/include/configs/am335x_evm.h	2026-11-02 17:33:53.216702326 -0600
+@@ -280,6 +280,7 @@
+  * add mass storage support and for gadget we add both RNDIS ethernet
+  * and DFU.
+  */
++#if defined(CONFIG_USB_MUSB_HOST) || defined(CONFIG_USB_MUSB_GADGET)
+ #define CONFIG_USB_MUSB_DSPS
+ #define CONFIG_ARCH_MISC_INIT
+ #define CONFIG_USB_MUSB_PIO_ONLY
+@@ -310,6 +311,7 @@
+ #define CONFIG_USBNET_HOST_ADDR	"de:ad:be:af:00:00"
+ #endif /* CONFIG_DM_ETH */
+ #endif /* CONFIG_USB_MUSB_GADGET */
++#endif /* CONFIG_USB_MUSB_HOST || CONFIG_USB_MUSB_GADGET */
+ 
+ /*
+  * Disable MMC DM for SPL build and can be re-enabled after adding

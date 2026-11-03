@@ -8,11 +8,9 @@ the MMC bootpart (device:partition) clearly before bootm so operators
 know which SD copy is starting Linux, versus a plain eMMC boot.
 
 ---
-diff --git a/include/configs/beaglebone-black.h b/include/configs/beaglebone-black.h
-index abcd124..abcd125 100644
---- a/include/configs/beaglebone-black.h
-+++ b/include/configs/beaglebone-black.h
-@@ -103,20 +103,34 @@
+--- a/include/configs/beaglebone-black.h	2026-10-29 17:08:37.531515350 -0600
++++ b/include/configs/beaglebone-black.h	2026-10-29 17:08:37.546436805 -0600
+@@ -104,9 +104,15 @@
      "bootfile=kernel\0" \
      "console=ttyS0,115200\0" \
      "optargs=\0" \
@@ -29,7 +27,7 @@ index abcd124..abcd125 100644
          "if run loadfdt; then " \
              "bootm ${loadaddr} - ${fdtaddr}; " \
          "else " \
-             "echo ERROR: Failed to load ${board}.dtb; " \
+@@ -114,7 +120,11 @@
          "fi;\0" \
      "mmcboot=mmc dev ${mmcdev}; " \
          "if mmc rescan; then " \
@@ -42,7 +40,4 @@ index abcd124..abcd125 100644
              "if run loadimage; then " \
                  "run mmcloados;" \
              "fi;" \
-         "fi;\0" \
-     NETARGS \
-     BOOTENV \
-     KUBOS_UPDATE_ARGS
+

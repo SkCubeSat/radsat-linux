@@ -1,0 +1,11 @@
+#!/bin/sh
+# Dropbear disabled on flight image — no USB/Ethernet connector for SSH.
+# Keep script as a no-op so Buildroot package install does not re-add a live server.
+case "$1" in
+	start|stop|restart|reload)
+		exit 0
+		;;
+	*)
+		echo "Usage: $0 {start|stop|restart}"
+		exit 1
+esac

@@ -5,7 +5,10 @@ Subject: [PATCH] arm: am33xx: use 115200 for the BBB console
 
 Use a single baud rate for U-Boot, kernel bootargs, and getty so the
 serial log is readable end-to-end. 921600 does not divide the 48 MHz
-UART clock cleanly; 115200 is the common reliable rate.
+UART clock cleanly.
+
+500000 stays out of the baud table so a saved env from older images
+cannot switch U-Boot away from 115200 after env load.
 
 ---
 diff --git a/include/configs/beaglebone-black.h b/include/configs/beaglebone-black.h
@@ -20,7 +23,7 @@ index abcd123..abcd124 100644
 +#define CONFIG_BAUDRATE         115200
  #define CONFIG_SYS_BAUDRATE_TABLE \
 -    { 9600, 19200, 38400, 57600, 115200, 921600 }
-+    { 9600, 19200, 38400, 57600, 115200, 500000 }
++    { 9600, 19200, 38400, 57600, 115200 }
  
  /* If we're compiling for the SPL, we don't have an env area */
  #if defined(CONFIG_SPL_BUILD) && defined(CONFIG_SPL_USBETH_SUPPORT)

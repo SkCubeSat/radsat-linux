@@ -1,0 +1,131 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Sat, 31 Oct 2026 18:30:00 -0600
+Subject: [PATCH] arm: bbb: enable I2C2 clock and restore FRAM overlay
+
+AM33xx enable_basic_clocks omitted i2c2clkctrl, so I2C2 register access
+in radsat_fram_overlay_env() data-aborted. Enable I2C2 (and SPI1 for
+MRAM) clocks. On blank/never-written FRAM, stamp the layout header and
+fail-open without overlaying keys.
+
+diff --git a/arch/arm/cpu/armv7/am33xx/clock_am33xx.c b/arch/arm/cpu/armv7/am33xx/clock_am33xx.c
+--- a/arch/arm/cpu/armv7/am33xx/clock_am33xx.c
++++ b/arch/arm/cpu/armv7/am33xx/clock_am33xx.c
+@@ -144,9 +144,11 @@
+ 		&cmper->gpio1clkctrl,
+ 		&cmper->gpio2clkctrl,
+ 		&cmper->gpio3clkctrl,
++		&cmper->i2c2clkctrl,
+ 		&cmper->i2c1clkctrl,
+ 		&cmper->cpgmac0clkctrl,
+ 		&cmper->spi0clkctrl,
++		&cmper->spi1clkctrl,
+ 		&cmrtc->rtcclkctrl,
+ 		&cmper->usb0clkctrl,
+ 		&cmper->emiffwclkctrl,
+diff --git a/common/fram_mission.c b/common/fram_mission.c
+--- a/common/fram_mission.c
++++ b/common/fram_mission.c
+@@ -65,6 +65,33 @@
+ 	return i2c_read(CONFIG_FRAM_I2C_ADDR, offset, 2, buf, len);
+ }
+ 
++static int fram_write(u16 offset, u8 *buf, int len)
++{
++	return i2c_write(CONFIG_FRAM_I2C_ADDR, offset, 2, buf, len);
++}
++
++/* 1 = blank (never written), 0 = has data, -1 = I2C error treated as blank */
++static int fram_region_blank(u16 offset, int len)
++{
++	u8 buf[32];
++	int left = len;
++	u16 off = offset;
++	int i;
++
++	while (left > 0) {
++		int n = left > (int)sizeof(buf) ? (int)sizeof(buf) : left;
++		if (fram_read(off, buf, n))
++			return -1;
++		for (i = 0; i < n; i++) {
++			if (buf[i] != 0x00 && buf[i] != 0xff)
++				return 0;
++		}
++		off += n;
++		left -= n;
++	}
++	return 1;
++}
++
+ static int fram_layout_present_invalid(void)
+ {
+ 	u8 hdr[16];
+@@ -85,6 +112,44 @@
+ 	return !(magic == FRAM_LAYOUT_MAGIC && ver == FRAM_LAYOUT_VERSION);
+ }
+ 
++/* First-time / wiped chip: write layout magic so Linux + U-Boot agree. */
++static void fram_ensure_layout_header(void)
++{
++	u8 hdr[16];
++	u32 magic;
++	u16 ver;
++	int i, blank = 1;
++
++	if (fram_read(FRAM_LAYOUT_OFFSET, hdr, sizeof(hdr))) {
++		puts("FRAM: layout read failed; skipping init\n");
++		return;
++	}
++	for (i = 0; i < 16; i++) {
++		if (hdr[i] != 0x00 && hdr[i] != 0xff)
++			blank = 0;
++	}
++	if (!blank) {
++		magic = hdr[0] | (hdr[1] << 8) | (hdr[2] << 16) | (hdr[3] << 24);
++		ver = hdr[4] | (hdr[5] << 8);
++		if (magic == FRAM_LAYOUT_MAGIC && ver == FRAM_LAYOUT_VERSION)
++			return;
++		/* Corrupt non-blank header: do not overwrite (fail-open). */
++		return;
++	}
++	memset(hdr, 0, sizeof(hdr));
++	hdr[0] = (u8)(FRAM_LAYOUT_MAGIC);
++	hdr[1] = (u8)(FRAM_LAYOUT_MAGIC >> 8);
++	hdr[2] = (u8)(FRAM_LAYOUT_MAGIC >> 16);
++	hdr[3] = (u8)(FRAM_LAYOUT_MAGIC >> 24);
++	hdr[4] = (u8)(FRAM_LAYOUT_VERSION);
++	hdr[5] = (u8)(FRAM_LAYOUT_VERSION >> 8);
++	if (fram_write(FRAM_LAYOUT_OFFSET, hdr, sizeof(hdr))) {
++		puts("FRAM: layout init write failed; continuing\n");
++		return;
++	}
++	puts("FRAM: blank chip - layout header initialized\n");
++}
++
+ static int fram_boot_crc_ok(void)
+ {
+ 	u8 data[FRAM_BOOT_DATA_END];
+@@ -185,13 +250,22 @@
+ {
+ 	unsigned int old_bus = i2c_get_bus_num();
+ 	u8 raw[FRAM_RECORD_SIZE];
+-	int i;
++	int i, blank;
+ 
+ 	if (i2c_set_bus_num(CONFIG_FRAM_I2C_BUS)) {
+ 		puts("FRAM: cannot select I2C2; skipping mission overlay\n");
+ 		return;
+ 	}
+ 
++	/* Never-written FRAM: stamp layout header, then fail-open (no keys yet). */
++	fram_ensure_layout_header();
++
++	blank = fram_region_blank(0, FRAM_BOOT_DATA_END);
++	if (blank == 1) {
++		puts("FRAM: boot region blank (never written); skipping overlay\n");
++		goto out;
++	}
++
+ 	if (fram_layout_present_invalid()) {
+ 		puts("FRAM: layout magic/version mismatch; skipping mission overlay\n");
+ 		goto out;

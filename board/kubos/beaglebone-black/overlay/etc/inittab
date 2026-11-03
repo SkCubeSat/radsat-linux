@@ -16,8 +16,8 @@
 
 # Startup the system
 ::sysinit:/bin/mount -t proc proc /proc
-# Hide KERN_NOTICE+ on console (e.g. "random: nonblocking pool is initialized")
-::sysinit:/bin/sh -c 'echo 5 >/proc/sys/kernel/printk'
+# Console: KERN_ERR and worse only (flight — avoid boot/info spam)
+::sysinit:/bin/sh -c 'echo 4 >/proc/sys/kernel/printk'
 ::sysinit:/bin/mkdir -p /dev/pts
 ::sysinit:/bin/mkdir -p /dev/shm
 # Check & clean partitions
@@ -42,6 +42,8 @@
 ::sysinit:/bin/sh -c 'mount /home/microsd 2>/dev/null || true'
 ::sysinit:/bin/sh -c 'mount /upgrade 2>/dev/null || true'
 ::sysinit:/bin/mount /envar
+# Repair /var/log -> /home/system/log (or tmpfs fallback) before monit/rsyslog
+::sysinit:/sbin/ensure-system-log
 # Announce whether rootfs is on SD or eMMC (after mounts are real).
 ::sysinit:/sbin/announce-boot-media
 # Setup hostname

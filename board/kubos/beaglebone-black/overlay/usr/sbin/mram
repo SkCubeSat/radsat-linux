@@ -1,0 +1,118 @@
+#!/bin/sh
+# Interact with mram-service GraphQL (default :8090).
+# Usage:
+#   mram ping|storage|env|ls
+#   mram info <name>
+#   mram get <name> [outfile]     # decoded bytes to outfile or stdout (-)
+#   mram put <name> <infile> [mime]
+#   mram rm <name>
+#   mram format                   # requires typing YES
+set -e
+URL="${MRAM_URL:-http://127.0.0.1:8090/}"
+
+pretty() {
+	RAW_JSON=$1
+	echo "$RAW_JSON" | sed 's/{/{\n/g; s/}/\n}/g; s/,/\n/g' | awk -v RAW="$RAW_JSON" '
+	  { gsub(/"/, "") }
+	  /^$/ || /^\{$/ || /^\}$/ { next }
+	  /^errors:/ { print "ERROR:"; print RAW; next }
+	  /^data:\{$/ { next }
+	  /:\{$/ { sub(/:\{$/, ":"); print; next }
+	  { sub(/:/, ": "); print "  " $0 }
+	'
+}
+
+gql() {
+	curl -sS "$URL" -H 'Content-Type: application/json' -d "$1"
+}
+
+CMD="${1:-}"
+case "$CMD" in
+	""|-h|--help|help)
+		sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
+		exit 0
+		;;
+	ping)
+		pretty "$(gql '{"query":"{ ping }"}')"
+		;;
+	storage)
+		pretty "$(gql '{"query":"{ storage { backend capacityBytes allocatedBytes liveBytes reclaimableBytes freeBytes fileCount } }"}')"
+		;;
+	env)
+		pretty "$(gql '{"query":"{ envRegion { offset size capacityBytes payloadCapacityBytes crcValid crc } }"}')"
+		;;
+	ls|list)
+		pretty "$(gql '{"query":"{ files { name mimeType compressed offset size createdAt updatedAt } }"}')"
+		;;
+	info)
+		NAME="${2:?usage: mram info <name>}"
+		ESC=$(printf '%s' "$NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')
+		pretty "$(gql "{\"query\":\"{ file(name: \\\"${ESC}\\\") { name mimeType compressed offset size createdAt updatedAt } }\"}")"
+		;;
+	get)
+		NAME="${2:?usage: mram get <name> [outfile]}"
+		OUTF="${3:--}"
+		RAW=$(python3 -c '
+import json,sys,urllib.request
+name=sys.argv[1]
+url=sys.argv[2]
+q={"query":"{ readFile(name: \"%s\") { name totalSize offset length dataBase64 } }" % name.replace("\\","\\\\").replace("\"","\\\"")}
+req=urllib.request.Request(url, data=json.dumps(q).encode(), headers={"Content-Type":"application/json"})
+print(urllib.request.urlopen(req).read().decode())
+' "$NAME" "$URL")
+		case "$RAW" in
+			*'"data":{'*) ;;
+			*) echo "$RAW"; exit 1 ;;
+		esac
+		python3 -c '
+import json,sys,base64
+j=json.loads(sys.argv[1])
+b64=j["data"]["readFile"]["dataBase64"]
+data=base64.b64decode(b64)
+out=sys.argv[2]
+if out=="-":
+    sys.stdout.buffer.write(data)
+else:
+    open(out,"wb").write(data)
+    print("wrote", out, "(%d bytes)" % len(data))
+' "$RAW" "$OUTF"
+		;;
+	put)
+		NAME="${2:?usage: mram put <name> <infile> [mime]}"
+		FILE="${3:?usage: mram put <name> <infile> [mime]}"
+		MIME="${4:-application/octet-stream}"
+		[ -f "$FILE" ] || { echo "not a file: $FILE" >&2; exit 1; }
+		case "$NAME" in
+			*[!A-Za-z0-9._-]*) echo "bad name: $NAME" >&2; exit 1 ;;
+		esac
+		RAW=$(python3 -c '
+import json,sys,base64,urllib.request
+name,path,mime,url=sys.argv[1:5]
+b64=base64.b64encode(open(path,"rb").read()).decode()
+q={"query":"mutation($i: WriteFileInput!){ writeFile(input:$i){ success errors file{ name size offset } } }",
+   "variables":{"i":{"name":name,"dataBase64":b64,"mimeType":mime,"compressed":False}}}
+req=urllib.request.Request(url, data=json.dumps(q).encode(), headers={"Content-Type":"application/json"})
+print(urllib.request.urlopen(req).read().decode())
+' "$NAME" "$FILE" "$MIME" "$URL")
+		case "$RAW" in
+			*'"success":true'*) pretty "$RAW" ;;
+			*) echo "$RAW"; exit 1 ;;
+		esac
+		;;
+	rm|delete)
+		NAME="${2:?usage: mram rm <name>}"
+		ESC=$(printf '%s' "$NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')
+		pretty "$(gql "{\"query\":\"mutation { deleteFile(name: \\\"${ESC}\\\") { success errors deleted } }\"}")"
+		;;
+	format)
+		echo "This erases the MRAM filesystem (U-Boot env region is reserved/separate)." >&2
+		printf "Type YES to confirm: "
+		read -r ans
+		[ "$ans" = "YES" ] || { echo "aborted"; exit 1; }
+		pretty "$(gql '{"query":"mutation { format(confirm: true) { success errors } }"}')"
+		;;
+	*)
+		echo "unknown command: $CMD" >&2
+		exit 1
+		;;
+esac

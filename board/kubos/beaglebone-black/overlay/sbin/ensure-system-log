@@ -1,0 +1,22 @@
+#!/bin/sh
+# /var/log is a symlink to /home/system/log (persists on the /home partition).
+# After /home is mounted, create the target (and optional monit.d). If /home is
+# unavailable, fall back to a tmpfs log dir so monit/rsyslog can still start.
+set -e
+if mkdir -p /home/system/log /home/system/etc/monit.d /home/system/kubos 2>/dev/null \
+	&& [ -d /home/system/log ]; then
+	# Repair symlink if something replaced it
+	if [ ! -L /var/log ] || [ "$(readlink /var/log)" != "/home/system/log" ]; then
+		rm -rf /var/log
+		ln -s /home/system/log /var/log
+	fi
+	# Seed log-rotate helper onto /home if the partition is empty
+	if [ ! -f /home/system/kubos/log-rotate.sh ] && [ -f /etc/kubos/log-rotate.sh ]; then
+		cp /etc/kubos/log-rotate.sh /home/system/kubos/log-rotate.sh
+		chmod +x /home/system/kubos/log-rotate.sh
+	fi
+	exit 0
+fi
+mkdir -p /tmp/system-log
+rm -rf /var/log
+ln -s /tmp/system-log /var/log

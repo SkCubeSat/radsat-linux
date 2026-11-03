@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+
+OUT = Path("/mnt/c/Users/logan/CubeSAT/radsat-linux/common/patches/uboot")
+DST2 = Path("/home/logan/code/radsat-linux/common/patches/uboot")
+BR_DL = Path("/home/logan/code/buildroot-2025.02.14/dl/uboot/uboot-1.1.0-git4.tar.gz")
+PATCHES = [
+    OUT / "0001-bbb-console-115200.patch",
+    OUT / "0002-bbb-env-on-boot-mmc.patch",
+    OUT / "0003-bbb-announce-boot-media.patch",
+    OUT / "0004-bbb-spl-uboot-fallback.patch",
+    OUT / "0005-bbb-dfu-dual-uboot.patch",
+]
+
+p6 = OUT / "0006-bbb-env-on-spi-mram.patch"
+t = p6.read_text()
+
+old = """@@ -47,15 +47,24 @@
+ #if defined(CONFIG_SPL_BUILD) && defined(CONFIG_SPL_USBETH_SUPPORT)
+ #define CONFIG_ENV_IS_NOWHERE
+ #else
+-/* Otherwise, it's in an ext4 partition */
+-#ifdef CONFIG_CMD_EXT4
++/*
++ * Primary env: SPI MRAM high region (see mram-service env_offset/env_size).
++ * EXT4 /uboot.env remains a load fallback inside env_mram.c.
++ */
++#define CONFIG_ENV_IS_IN_MRAM		1
+"""
+
+new = """@@ -47,15 +47,25 @@
+-#if defined(CONFIG_SPL_BUILD) && defined(CONFIG_SPL_USBETH_SUPPORT)
++#ifdef CONFIG_SPL_BUILD
+ #define CONFIG_ENV_IS_NOWHERE
+ #else
+-/* Otherwise, it's in an ext4 partition */
+-#ifdef CONFIG_CMD_EXT4
++/*
++ * Primary env: SPI MRAM high region (see mram-service env_offset/env_size).
++ * EXT4 /uboot.env remains a load fallback inside env_mram.c.
++ */
++#define CONFIG_ENV_IS_IN_MRAM		1
+"""
+
+if old not in t:
+    raise SystemExit("hunk missing")
+t = t.replace(old, new, 1)
+p6.write_text(t)
+
+with tempfile.TemporaryDirectory() as td:
+    td = Path(td)
+    v = td / "v"
+    v.mkdir()
+    subprocess.check_call(
+        ["bash", "-lc", f"gzip -d -c {BR_DL} | tar --strip-components=1 -C {v} -xf -"]
+    )
+    for p in PATCHES + [p6, OUT / "0007-bbb-fram-mission-policy.patch"]:
+        subprocess.check_call(
+            ["patch", "-p1", "--forward", "--batch", "-i", str(p)], cwd=v
+        )
+    hdr = (v / "include/configs/beaglebone-black.h").read_text()
+    assert "#ifdef CONFIG_SPL_BUILD" in hdr
+    assert "CONFIG_SPL_USBETH_SUPPORT" not in hdr
+    print("VERIFY_OK")
+
+if DST2.parent.exists():
+    shutil.copy2(p6, DST2 / p6.name)
+print("updated", p6.stat().st_size)

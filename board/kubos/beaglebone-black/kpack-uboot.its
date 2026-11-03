@@ -1,0 +1,41 @@
+/*
+ * Kubos / RadSat U-Boot-only upgrade package (dual FAT copies).
+ * FIT node names uboot / uboot-bak map to u-boot.img / u-boot-bak.img via
+ * update_kubos name mapping.
+ */
+
+/dts-v1/;
+
+/ {
+	description = "RadSat dual U-Boot upgrade for BBB";
+	#address-cells = <1>;
+
+	images {
+		uboot@1 {
+			description = "Primary U-Boot (u-boot.img)";
+			data = /incbin/("./u-boot.img");
+			type = "firmware";
+			arch = "arm";
+			os = "linux";
+			compression = "none";
+			load = <00000000>;
+			entry = <00000000>;
+			hash@1 {
+				algo = "sha256";
+			};
+		};
+		uboot-bak@1 {
+			description = "Backup U-Boot (u-boot-bak.img)";
+			data = /incbin/("./u-boot.img");
+			type = "firmware";
+			arch = "arm";
+			os = "linux";
+			compression = "none";
+			load = <00000000>;
+			entry = <00000000>;
+			hash@1 {
+				algo = "sha256";
+			};
+		};
+	};
+};

@@ -60,5 +60,31 @@
 				algo = "sha256";
 			};
 		};
+		uboot@1 {
+			description = "Primary U-Boot (u-boot.img)";
+			data = /incbin/("./u-boot.img");
+			type = "firmware";
+			arch = "arm";
+			os = "linux";
+			compression = "none";
+			load = <00000000>;
+			entry = <00000000>;
+			hash@1 {
+				algo = "sha256";
+			};
+		};
+		uboot-bak@1 {
+			description = "Backup U-Boot (u-boot-bak.img)";
+			data = /incbin/("./u-boot.img");
+			type = "firmware";
+			arch = "arm";
+			os = "linux";
+			compression = "none";
+			load = <00000000>;
+			entry = <00000000>;
+			hash@1 {
+				algo = "sha256";
+			};
+		};
 	};
 };

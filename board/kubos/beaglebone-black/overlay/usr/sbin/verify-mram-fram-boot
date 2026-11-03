@@ -1,0 +1,44 @@
+#!/bin/sh
+# On-target smoke checks for MRAM env + FRAM anti-brick layout.
+# Run after boot: verify-mram-fram-boot
+# BusyBox-safe: no head/cut required for the bootcmd gate.
+set -eu
+
+echo "=== fw_printenv (MRAM-synced /envar) ==="
+bootcmd_line=$(fw_printenv bootcmd 2>/dev/null || true)
+if [ -z "$bootcmd_line" ]; then
+	echo "(no bootcmd yet — defaults until saveenv/seed)"
+else
+	echo "$bootcmd_line"
+	case "$bootcmd_line" in
+		*bootp*|*nfs*|*nfsroot*|*tftp*)
+			echo "FAIL: bootcmd looks like NFS/network boot — do NOT flash U-Boot until mram-env-sync --seed"
+			exit 1
+			;;
+	esac
+	case "$bootcmd_line" in
+		bootcmd=run\ distro_bootcmd|bootcmd=run\ distro_bootcmd\;*)
+			echo "OK: bootcmd is Kubos-safe (distro_bootcmd)"
+			;;
+		*)
+			echo "WARN: bootcmd is not the expected 'run distro_bootcmd' — review before Phase 3"
+			;;
+	esac
+fi
+
+echo "=== mram env region via GraphQL (if service up) ==="
+curl -s http://127.0.0.1:8090/ -H 'Content-Type: application/json' \
+  -d '{"query":"{ envRegion { offset size payloadCapacityBytes crcValid crc } }"}' || true
+echo
+
+echo "=== fram mission state ==="
+fram-get 2>/dev/null || curl -s http://127.0.0.1:8091/ -H 'Content-Type: application/json' \
+  -d '{"query":"{ missionState { fsooTimer deployed removeBeforeFlight } health { bootChecksumValid } }"}'
+echo
+
+echo "Anti-brick notes:"
+echo " 1) Corrupt FRAM (bad CRC) must still boot Linux; U-Boot warns and skips overlay."
+echo " 2) U-Boot: saveenv then reset — env must persist from MRAM; fw_printenv matches after S79."
+echo " 3) fram-set fsoo_timer 42; reboot; U-Boot printenv fsoo_timer == 42 when CRC valid."
+echo " 4) Never use i2c0/0x50 (cape EEPROM); FRAM is i2c-2/0x50."
+echo " 5) Never Phase-3 U-Boot flash while bootcmd contains bootp/nfs."

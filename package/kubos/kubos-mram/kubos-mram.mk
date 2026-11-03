@@ -29,7 +29,9 @@ define MRAM_INSTALL_STAGING_CMDS
 	echo 'backend = "spidev"' >> $(KUBOS_CONFIG_FRAGMENT_DIR)/mram-service
 	echo 'spi_device = ${BR2_KUBOS_MRAM_SPI_DEVICE}' >> $(KUBOS_CONFIG_FRAGMENT_DIR)/mram-service
 	echo 'spi_speed_hz = ${BR2_KUBOS_MRAM_SPI_SPEED_HZ}' >> $(KUBOS_CONFIG_FRAGMENT_DIR)/mram-service
-	echo -e 'spi_mode = ${BR2_KUBOS_MRAM_SPI_MODE}\n' >> $(KUBOS_CONFIG_FRAGMENT_DIR)/mram-service
+	echo 'spi_mode = ${BR2_KUBOS_MRAM_SPI_MODE}' >> $(KUBOS_CONFIG_FRAGMENT_DIR)/mram-service
+	echo 'env_offset = 514048' >> $(KUBOS_CONFIG_FRAGMENT_DIR)/mram-service
+	echo -e 'env_size = 10240\n' >> $(KUBOS_CONFIG_FRAGMENT_DIR)/mram-service
 endef
 
 # Install the application into the rootfs file system
@@ -39,6 +41,11 @@ define MRAM_INSTALL_TARGET_CMDS
 	$(TARGET_STRIP) $(KUBOS_CARGO_OUTPUT_DIR)/mram-service
 	$(INSTALL) -D -m 0755 $(KUBOS_CARGO_OUTPUT_DIR)/mram-service \
 		$(TARGET_DIR)/usr/sbin
+	if [ -f $(KUBOS_CARGO_OUTPUT_DIR)/mram-env-sync ]; then \
+		$(TARGET_STRIP) $(KUBOS_CARGO_OUTPUT_DIR)/mram-env-sync ; \
+		$(INSTALL) -D -m 0755 $(KUBOS_CARGO_OUTPUT_DIR)/mram-env-sync \
+			$(TARGET_DIR)/usr/sbin ; \
+	fi
 
 	echo 'CHECK PROCESS kubos-mram PIDFILE /var/run/mram-service.pid' > $(TARGET_DIR)/etc/monit.d/kubos-mram.cfg
 	echo '	START PROGRAM = "/etc/init.d/S${BR2_KUBOS_MRAM_INIT_LVL}kubos-mram start"' >> $(TARGET_DIR)/etc/monit.d/kubos-mram.cfg

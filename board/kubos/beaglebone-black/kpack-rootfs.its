@@ -1,0 +1,50 @@
+/*
+ * RadSat rootfs/kernel/dtb-only upgrade package (no U-Boot).
+ * Use for Phase 1 deploy while keeping the live Oct-29 (pre-MRAM) bootloader.
+ */
+
+/dts-v1/;
+
+/ {
+	description = "RadSat rootfs+kernel+dtb upgrade for BBB (no U-Boot)";
+	#address-cells = <1>;
+
+	images {
+		kernel@1 {
+			data = /incbin/("./kernel");
+			type = "firmware";
+			arch = "arm";
+			os = "linux";
+			compression = "none";
+			load = <00000000>;
+			entry = <00000000>;
+			hash@1 {
+				algo = "sha256";
+			};
+		};
+		rootfs@1 {
+			data = /incbin/("./rootfs.ext2");
+			type = "firmware";
+			arch = "arm";
+			os = "linux";
+			compression = "none";
+			load = <00000000>;
+			entry = <00000000>;
+			hash@1 {
+				algo = "sha256";
+			};
+		};
+		beaglebone-black.dtb@1 {
+			data = /incbin/("./beaglebone-black.dtb");
+			type = "firmware";
+			arch = "arm";
+			os = "linux";
+			compression = "none";
+			load = <00000000>;
+			entry = <00000000>;
+			hash@1 {
+				algo = "sha256";
+			};
+		};
+	};
+};

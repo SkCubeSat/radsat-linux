@@ -20,12 +20,34 @@ cd "${BR2_EXTERNAL_KUBOS_LINUX_PATH}/tools"
 
 mv kubos-kernel.itb "${BINARIES_DIR}/kernel"
 
-# Create the base upgrade file
+# Dual U-Boot copies on the VFAT boot partition (SPL primary + bak).
+cp -f "${BINARIES_DIR}/u-boot.img" "${BINARIES_DIR}/u-boot-bak.img"
+
+# Upgrade ITBs live only in the genimage /upgrade partition. Clear any
+# leftovers so Buildroot's rootfs.ext2 (256M) is never poisoned by ~520M
+# of kpacks from an interrupted previous post-image run.
+mkdir -p "${TARGET_DIR}/upgrade"
+find "${TARGET_DIR}/upgrade" -mindepth 1 -maxdepth 1 -delete
+
+# Create the base upgrade file (kernel + rootfs + dtb + dual U-Boot)
 cd "${BR2_EXTERNAL_KUBOS_LINUX_PATH}/tools"
 ./kubos-package.sh -b "${BRANCH}" -t beaglebone-black -v base \
     -i "${BOARD_DIR}/kpack.its"
 
 mv kpack-base.itb "${TARGET_DIR}/upgrade"
+
+# Rootfs+kernel+dtb only (no U-Boot) — Phase 1 safe deploy
+./kubos-package.sh -b "${BRANCH}" -t beaglebone-black -v rootfs \
+    -i "${BOARD_DIR}/kpack-rootfs.its"
+mv kpack-rootfs.itb "${TARGET_DIR}/upgrade/"
+cp -f "${TARGET_DIR}/upgrade/kpack-rootfs.itb" "${BINARIES_DIR}/kpack-rootfs.itb"
+
+# U-Boot-only upgrade package for bootloader-redundant updates
+./kubos-package.sh -b "${BRANCH}" -t beaglebone-black -v uboot \
+    -i "${BOARD_DIR}/kpack-uboot.its"
+mv kpack-uboot.itb "${TARGET_DIR}/upgrade/"
+# Also keep a copy next to images for PC-side install/tests
+cp -f "${TARGET_DIR}/upgrade/kpack-uboot.itb" "${BINARIES_DIR}/kpack-uboot.itb"
 
 mkdir -p "${TARGET_DIR}/microsd"
 

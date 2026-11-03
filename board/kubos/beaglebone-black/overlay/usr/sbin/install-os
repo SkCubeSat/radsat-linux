@@ -29,7 +29,18 @@
 # unused space after the primary span and are for restore/recovery.
 #
 
-set -e
+# NEVER use `set -e` with BusyBox ash on this image. Several common
+# patterns (while-read EOF, failed globs, arithmetic edge cases) abort
+# the script with zero output. Check failures explicitly instead.
+set +e
+
+# Pure-shell basename — do not rely on the BusyBox applet being enabled.
+basename() {
+    _b=$1
+    _b=${_b%/}
+    [ -n "$_b" ] || { echo "/"; return 0; }
+    echo "${_b##*/}"
+}
 
 YES=0
 DO_BACKUPS=0
@@ -77,14 +88,10 @@ while [ "$#" -gt 0 ]; do
     shift
 done
 
-euid=""
-while read -r key _real e _saved _fs; do
-    if [ "$key" = "Uid:" ]; then
-        euid=$e
-        break
-    fi
-done < /proc/self/status
-if [ "$euid" != "0" ]; then
+# Prefer id(1); fall back to /proc. Do not use `while read` under `set -e` —
+# BusyBox ash treats EOF from read as failure and silently aborts the script.
+euid=$(id -u 2>/dev/null) || euid=$(awk '/^Uid:/{print $3; exit}' /proc/self/status)
+if [ -z "$euid" ] || [ "$euid" != "0" ]; then
     echo "install-os: must be root" >&2
     exit 1
 fi
@@ -136,20 +143,63 @@ image_span_sectors() {
     echo "$_end"
 }
 
+# MBR disk signature at offset 440 as little-endian 8 hex digits (PARTUUID prefix).
+mbr_sig_le() {
+    _raw=$(dd if="$1" bs=1 skip=440 count=4 2>/dev/null | hexdump -v -e '1/1 "%02x"')
+    echo "$_raw" | sed -n 's/^\(..\)\(..\)\(..\)\(..\)$/\4\3\2\1/p'
+}
+
 root_disk_name() {
-    _src=$(awk '$2 == "/" { print $1; exit }' /proc/mounts)
+    _src=$(awk '$2 == "/" { print $1; exit }' /proc/mounts 2>/dev/null)
+    [ -n "$_src" ] || _src=$(mount 2>/dev/null | awk '$3 == "/" { print $1; exit }')
     _name=$(basename "$_src")
     case "$_name" in
         mmcblk*p*)
             echo "${_name%%p*}"
+            return 0
             ;;
         mmcblk*)
             echo "$_name"
-            ;;
-        *)
-            echo ""
+            return 0
             ;;
     esac
+
+    # BusyBox often mounts PARTUUID=... as /dev/root — resolve via cmdline + MBR sig.
+    _partuuid=""
+    if [ -r /proc/cmdline ]; then
+        _partuuid=$(sed -n 's/.*root=PARTUUID=\([^ ]*\).*/\1/p' /proc/cmdline)
+    fi
+    if [ -z "$_partuuid" ]; then
+        echo ""
+        return 0
+    fi
+    _sig=$(echo "$_partuuid" | sed 's/-.*//' | tr 'A-F' 'a-f')
+    _part=${_partuuid#*-}
+    for _b in /sys/block/mmcblk*; do
+        [ -d "$_b" ] || continue
+        _d=$(basename "$_b")
+        case "$_d" in
+            *boot*|*rpmb*) continue ;;
+        esac
+        _raw=$(mbr_sig_le "/dev/$_d")
+        [ "$_raw" = "$_sig" ] || continue
+        echo "$_d"
+        return 0
+    done
+    echo ""
+}
+
+# Never lazy-umount partitions belonging to the live root disk.
+safe_umount_disk_parts() {
+    _disk=$1
+    [ -n "$_disk" ] || return 0
+    _root=$(root_disk_name)
+    _dname=$(basename "$_disk")
+    if [ -n "$_root" ] && [ "$_dname" = "$_root" ]; then
+        echo "OS Install: refusing to umount root disk $_disk (only data mounts)"
+        return 0
+    fi
+    umount -l ${_disk}p* 2>/dev/null || true
 }
 
 confirm() {
@@ -192,12 +242,9 @@ umount_kubos() {
     umount -l /upgrade 2>/dev/null || true
     umount -l /envar 2>/dev/null || true
     umount -l /home 2>/dev/null || true
-    if [ -n "$1" ]; then
-        umount -l ${1}p* 2>/dev/null || true
-    fi
-    if [ -n "$2" ]; then
-        umount -l ${2}p* 2>/dev/null || true
-    fi
+    # $1 / $2 are whole disks (/dev/mmcblkN). Never touch root's partitions.
+    safe_umount_disk_parts "$1"
+    safe_umount_disk_parts "$2"
 }
 
 dd_span() {
@@ -208,12 +255,25 @@ dd_span() {
     _skip=${5:-0}
     _mb=$((_count / 2048))
     echo "OS Install: dd ${_count} sectors (~${_mb} MiB) if=$_if of=$_of skip=$_skip seek=$_seek"
-    if [ -x /usr/bin/pv ]; then
-        dd if="$_if" bs=512 skip="$_skip" count="$_count" 2>/dev/null \
-            | pv -s $((_count * 512)) \
-            | dd of="$_of" bs=512 seek="$_seek"
+    # Large blocks; avoid pv ($((_count*512)) overflows on 32-bit ash → 0-byte copy).
+    # bs=4M (=8192 sectors). Only valid when skip/seek/count are multiples of 8192,
+    # or when skip=seek=0 (whole-span install). Otherwise fall back to 512.
+    if [ "$_skip" -eq 0 ] && [ "$_seek" -eq 0 ] && [ "$((_count % 8192))" -eq 0 ]; then
+        _blk=$((_count / 8192))
+        dd if="$_if" of="$_of" bs=4M count="$_blk" conv=fsync
+    elif [ "$_skip" -eq 0 ] && [ "$_seek" -eq 0 ]; then
+        _blk=$((_count / 8192))
+        _rem=$((_count % 8192))
+        if [ "$_blk" -gt 0 ]; then
+            dd if="$_if" of="$_of" bs=4M count="$_blk" conv=fsync
+        fi
+        if [ "$_rem" -gt 0 ]; then
+            dd if="$_if" of="$_of" bs=512 skip=$((_blk * 8192)) \
+                seek=$((_blk * 8192)) count="$_rem" conv=fsync
+        fi
     else
-        dd if="$_if" of="$_of" bs=512 skip="$_skip" seek="$_seek" count="$_count"
+        dd if="$_if" of="$_of" bs=512 skip="$_skip" seek="$_seek" \
+            count="$_count" conv=fsync
     fi
     sync
 }
@@ -336,12 +396,28 @@ create_sd_backups_from() {
     write_slot_map "$_src_span" "$SLOTS"
 }
 
+# Sectors to copy for a bootable install: MBR through envar (p3).
+# Skip the huge mostly-empty /home (p4); mkfs it on the destination instead.
+essential_span_sectors() {
+    _disk=$1
+    _p3="/sys/block/${_disk}/${_disk}p3"
+    if [ -d "$_p3" ]; then
+        _s=$(cat "$_p3/start")
+        _z=$(cat "$_p3/size")
+        echo $((_s + _z))
+        return 0
+    fi
+    image_span_sectors "$_disk"
+}
+
 do_sd_to_emmc() {
     need_both
     SD_NAME=$(basename "$SD")
     EMMC_NAME=$(basename "$EMMC")
-    SPAN=$(image_span_sectors "$SD_NAME")
+    SPAN=$(essential_span_sectors "$SD_NAME")
+    FULL_SPAN=$(image_span_sectors "$SD_NAME")
     EMMC_BLOCKS=$(cat /sys/block/${EMMC_NAME}/size)
+    ROOT=$(root_disk_name)
 
     if [ "$SPAN" -le 0 ]; then
         echo "install-os: no partitions found on $SD" >&2
@@ -351,12 +427,38 @@ do_sd_to_emmc() {
         echo "install-os: SD image span ($SPAN) larger than eMMC ($EMMC_BLOCKS)" >&2
         exit 1
     fi
+    if [ -n "$ROOT" ] && [ "$ROOT" = "$EMMC_NAME" ]; then
+        echo "install-os: rootfs is on eMMC ($EMMC_NAME); refusing SD->eMMC while live on eMMC." >&2
+        echo "install-os: boot from SD (root on SD), then re-run: install-os sd-to-emmc" >&2
+        exit 1
+    fi
+    if [ -z "$ROOT" ] || [ "$ROOT" != "$SD_NAME" ]; then
+        echo "install-os: rootfs is not on SD ($SD_NAME, root='$ROOT'); refusing." >&2
+        echo "install-os: boot from the SD card image, then re-run sd-to-emmc." >&2
+        exit 1
+    fi
 
-    confirm "This will wipe eMMC ($EMMC) and copy ${SPAN} sectors from SD ($SD)."
+    confirm "This will wipe eMMC ($EMMC) and copy ${SPAN} sectors (~$((SPAN / 2048)) MiB) from SD ($SD), then mkfs /home."
     stop_services
     umount_kubos "$EMMC" ""
     dd_span "$SD" "$EMMC" "$SPAN" 0 0
     set_disk_signature_emmc "$EMMC"
+    # Partition table still describes p4; format a fresh empty /home.
+    if [ -b "${EMMC}p4" ] || [ "$FULL_SPAN" -gt "$SPAN" ]; then
+        echo "OS Install: Creating fresh ext4 on ${EMMC}p4 (/home)"
+        # part nodes may lag; force rescan
+        command -v partx >/dev/null 2>&1 && partx -u "$EMMC" 2>/dev/null
+        i=0
+        while [ "$i" -lt 10 ] && [ ! -b "${EMMC}p4" ]; do
+            sleep 1
+            i=$((i + 1))
+        done
+        if [ -b "${EMMC}p4" ]; then
+            mkfs.ext4 -F "${EMMC}p4" || echo "install-os: mkfs ${EMMC}p4 failed (boot anyway, fix /home later)" >&2
+        else
+            echo "install-os: ${EMMC}p4 not visible yet; reboot into eMMC then mkfs.ext4 ${EMMC}p4 if /home fails" >&2
+        fi
+    fi
     echo "OS Install: Done (SD -> eMMC)."
     echo "Power off, remove the SD card, then boot from eMMC alone."
     echo "While the SD is still inserted, ROM/SPL will prefer the SD."
