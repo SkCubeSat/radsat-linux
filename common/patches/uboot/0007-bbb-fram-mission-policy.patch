@@ -11,7 +11,7 @@ diff --git a/common/fram_mission.c b/common/fram_mission.c
 new file mode 100644
 --- /dev/null
 +++ b/common/fram_mission.c
-@@ -0,0 +1,215 @@
+@@ -0,0 +1,219 @@
 +/*
 + * Overlay allowlisted mission/boot-policy keys from I2C2 FRAM (FM24CL64B @ 0x50).
 + *
@@ -38,7 +38,8 @@ new file mode 100644
 +#define FRAM_BOOT_POLICY_KEYS	6
 +#define FRAM_BOOT_DATA_END	(FRAM_BOOT_POLICY_KEYS * FRAM_SLOTS_PER_KEY * FRAM_RECORD_SIZE)
 +#define FRAM_LAYOUT_MAGIC	0x4D415246u	/* "FRAM" LE */
-+#define FRAM_LAYOUT_VERSION	1
++#define FRAM_LAYOUT_VERSION	2
++#define FRAM_LAYOUT_VERSION_MIN	1
 +#define FRAM_LAYOUT_OFFSET	2048
 +#define FRAM_REC_MAGIC		0x4652
 +
@@ -96,7 +97,10 @@ new file mode 100644
 +		return 0;
 +	magic = hdr[0] | (hdr[1] << 8) | (hdr[2] << 16) | (hdr[3] << 24);
 +	ver = hdr[4] | (hdr[5] << 8);
-+	return !(magic == FRAM_LAYOUT_MAGIC && ver == FRAM_LAYOUT_VERSION);
++	/* v1 and v2 share boot-key offsets; accept both. */
++	return !(magic == FRAM_LAYOUT_MAGIC &&
++		 ver >= FRAM_LAYOUT_VERSION_MIN &&
++		 ver <= FRAM_LAYOUT_VERSION);
 +}
 +
 +static int fram_boot_crc_ok(void)

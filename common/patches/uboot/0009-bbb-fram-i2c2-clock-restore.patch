@@ -4,9 +4,10 @@ Date: Sat, 31 Oct 2026 18:30:00 -0600
 Subject: [PATCH] arm: bbb: enable I2C2 clock and restore FRAM overlay
 
 AM33xx enable_basic_clocks omitted i2c2clkctrl, so I2C2 register access
-in radsat_fram_overlay_env() data-aborted. Enable I2C2 (and SPI1 for
-MRAM) clocks. On blank/never-written FRAM, stamp the layout header and
-fail-open without overlaying keys.
+in radsat_fram_overlay_env data-aborted. Enable I2C2 and SPI1 clocks.
+On blank FRAM, stamp layout header and fail-open without overlaying keys.
+
+---
 
 diff --git a/arch/arm/cpu/armv7/am33xx/clock_am33xx.c b/arch/arm/cpu/armv7/am33xx/clock_am33xx.c
 --- a/arch/arm/cpu/armv7/am33xx/clock_am33xx.c
@@ -26,7 +27,7 @@ diff --git a/arch/arm/cpu/armv7/am33xx/clock_am33xx.c b/arch/arm/cpu/armv7/am33x
 diff --git a/common/fram_mission.c b/common/fram_mission.c
 --- a/common/fram_mission.c
 +++ b/common/fram_mission.c
-@@ -65,6 +65,33 @@
+@@ -66,6 +66,33 @@
  	return i2c_read(CONFIG_FRAM_I2C_ADDR, offset, 2, buf, len);
  }
  
@@ -60,8 +61,8 @@ diff --git a/common/fram_mission.c b/common/fram_mission.c
  static int fram_layout_present_invalid(void)
  {
  	u8 hdr[16];
-@@ -85,6 +112,44 @@
- 	return !(magic == FRAM_LAYOUT_MAGIC && ver == FRAM_LAYOUT_VERSION);
+@@ -89,6 +116,46 @@
+ 		 ver <= FRAM_LAYOUT_VERSION);
  }
  
 +/* First-time / wiped chip: write layout magic so Linux + U-Boot agree. */
@@ -83,7 +84,9 @@ diff --git a/common/fram_mission.c b/common/fram_mission.c
 +	if (!blank) {
 +		magic = hdr[0] | (hdr[1] << 8) | (hdr[2] << 16) | (hdr[3] << 24);
 +		ver = hdr[4] | (hdr[5] << 8);
-+		if (magic == FRAM_LAYOUT_MAGIC && ver == FRAM_LAYOUT_VERSION)
++		if (magic == FRAM_LAYOUT_MAGIC &&
++		    ver >= FRAM_LAYOUT_VERSION_MIN &&
++		    ver <= FRAM_LAYOUT_VERSION)
 +			return;
 +		/* Corrupt non-blank header: do not overwrite (fail-open). */
 +		return;
@@ -105,7 +108,7 @@ diff --git a/common/fram_mission.c b/common/fram_mission.c
  static int fram_boot_crc_ok(void)
  {
  	u8 data[FRAM_BOOT_DATA_END];
-@@ -185,13 +250,22 @@
+@@ -189,13 +256,22 @@
  {
  	unsigned int old_bus = i2c_get_bus_num();
  	u8 raw[FRAM_RECORD_SIZE];

@@ -1,0 +1,139 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Mon, 2 Nov 2026 21:50:00 -0600
+Subject: [PATCH] arm: bbb: enable chunked SPI MRAM env load/save
+
+Full-size McSPI xfers of CONFIG_ENV_SIZE (10KiB) can hang with no
+timeout. Transfer in 64-byte chunks and re-enable SPI MRAM as the
+primary env store. EXT4 /uboot.env remains the fail-open fallback.
+
+---
+
+diff --git a/common/env_mram.c b/common/env_mram.c
+--- a/common/env_mram.c
++++ b/common/env_mram.c
+@@ -1,9 +1,9 @@
+ /*
+  * SPI MRAM environment storage for RadSat (MR2xH40 protocol).
+  *
+- * Boot path is fail-open: SPI MRAM load/save is skipped until the McSPI
+- * transfer path is hardened (full-size xfers can wedge with no timeout).
+- * Relocate uses EXT4 /uboot.env then compiled-in defaults.
++ * Loads/saves the classic U-Boot env blob from a reserved high region on
++ * McSPI2 CS0. SPI transfers are chunked (McSPI FIFO-safe). Falls back to
++ * EXT4 /uboot.env then compiled-in defaults on CRC/SPI failure.
+  *
+  * SPDX-License-Identifier:	GPL-2.0+
+  */
+@@ -39,7 +39,7 @@
+ 
+ /* Set to 1 only after SPI xfer is proven not to hang on this board. */
+ #ifndef CONFIG_ENV_MRAM_SPI_ENABLE
+-# define CONFIG_ENV_MRAM_SPI_ENABLE	0
++# define CONFIG_ENV_MRAM_SPI_ENABLE	1
+ #endif
+ 
+ #define MRAM_CMD_WREN	0x06
+@@ -71,50 +71,65 @@
+ 	return ret;
+ }
+ 
++/* McSPI can wedge on large single xfers; keep payload chunks small. */
++#ifndef CONFIG_ENV_MRAM_CHUNK
++# define CONFIG_ENV_MRAM_CHUNK	64
++#endif
++
+ static int mram_read(struct spi_slave *slave, u32 offset, void *buf, u32 len)
+ {
+-	u8 *frame;
+-	int ret;
+-
+-	frame = malloc(4 + len);
+-	if (!frame)
+-		return -ENOMEM;
+-	frame[0] = MRAM_CMD_READ;
+-	frame[1] = (offset >> 16) & 0xff;
+-	frame[2] = (offset >> 8) & 0xff;
+-	frame[3] = offset & 0xff;
+-	memset(frame + 4, 0, len);
+-
+-	ret = mram_xfer(slave, frame, 4 + len);
+-	if (!ret)
+-		memcpy(buf, frame + 4, len);
+-	free(frame);
+-	return ret;
++	u8 *dst = buf;
++	u8 frame[4 + CONFIG_ENV_MRAM_CHUNK];
++	u32 done = 0;
++
++	while (done < len) {
++		u32 n = len - done;
++		int ret;
++
++		if (n > CONFIG_ENV_MRAM_CHUNK)
++			n = CONFIG_ENV_MRAM_CHUNK;
++		frame[0] = MRAM_CMD_READ;
++		frame[1] = ((offset + done) >> 16) & 0xff;
++		frame[2] = ((offset + done) >> 8) & 0xff;
++		frame[3] = (offset + done) & 0xff;
++		memset(frame + 4, 0, n);
++		ret = mram_xfer(slave, frame, 4 + n);
++		if (ret)
++			return ret;
++		memcpy(dst + done, frame + 4, n);
++		done += n;
++	}
++	return 0;
+ }
+ 
+ static int mram_write(struct spi_slave *slave, u32 offset, const void *buf,
+ 		      u32 len)
+ {
+-	u8 wren = MRAM_CMD_WREN;
+-	u8 *frame;
+-	int ret;
+-
+-	ret = mram_xfer(slave, &wren, 1);
+-	if (ret)
+-		return ret;
+-
+-	frame = malloc(4 + len);
+-	if (!frame)
+-		return -ENOMEM;
+-	frame[0] = MRAM_CMD_WRITE;
+-	frame[1] = (offset >> 16) & 0xff;
+-	frame[2] = (offset >> 8) & 0xff;
+-	frame[3] = offset & 0xff;
+-	memcpy(frame + 4, buf, len);
+-
+-	ret = mram_xfer(slave, frame, 4 + len);
+-	free(frame);
+-	return ret;
++	const u8 *src = buf;
++	u8 frame[4 + CONFIG_ENV_MRAM_CHUNK];
++	u32 done = 0;
++
++	while (done < len) {
++		u8 wren = MRAM_CMD_WREN;
++		u32 n = len - done;
++		int ret;
++
++		if (n > CONFIG_ENV_MRAM_CHUNK)
++			n = CONFIG_ENV_MRAM_CHUNK;
++		ret = mram_xfer(slave, &wren, 1);
++		if (ret)
++			return ret;
++		frame[0] = MRAM_CMD_WRITE;
++		frame[1] = ((offset + done) >> 16) & 0xff;
++		frame[2] = ((offset + done) >> 8) & 0xff;
++		frame[3] = (offset + done) & 0xff;
++		memcpy(frame + 4, src + done, n);
++		ret = mram_xfer(slave, frame, 4 + n);
++		if (ret)
++			return ret;
++		done += n;
++	}
++	return 0;
+ }
+ #endif /* CONFIG_ENV_MRAM_SPI_ENABLE */
+ 

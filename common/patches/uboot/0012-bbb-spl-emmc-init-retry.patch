@@ -1,0 +1,56 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Mon, 2 Nov 2026 21:35:00 -0600
+Subject: [PATCH] spl: mmc: retry eMMC find after warm reset
+
+On AM335x warm reset, eMMC often is not visible on the first
+spl_mmc_find_device() call, so SPL falls back to SD. Retry a few
+times with a short delay before giving up.
+
+---
+
+diff --git a/common/spl/spl_mmc.c b/common/spl/spl_mmc.c
+--- a/common/spl/spl_mmc.c
++++ b/common/spl/spl_mmc.c
+@@ -118,6 +118,8 @@
+ 	struct udevice *dev;
+ #endif
+ 	int err, mmc_dev;
++	int attempt;
++	const int max_attempts = 5;
+ 
+ 	mmc_dev = spl_mmc_get_device_index(boot_device);
+ 	if (mmc_dev < 0)
+@@ -136,12 +138,29 @@
+ 	if (!err)
+ 		*mmcp = mmc_get_mmc_dev(dev);
+ #else
+-	*mmcp = find_mmc_device(mmc_dev);
+-	err = *mmcp ? 0 : -ENODEV;
++	/*
++	 * Warm-reset race: eMMC may need a few ms before the controller
++	 * enumerates it. Retry initialize+find before failing over.
++	 */
++	err = -ENODEV;
++	*mmcp = NULL;
++	for (attempt = 0; attempt < max_attempts; attempt++) {
++		if (attempt > 0) {
++			mdelay(20);
++			mmc_initialize(NULL);
++		}
++		*mmcp = find_mmc_device(mmc_dev);
++		if (*mmcp) {
++			err = 0;
++			break;
++		}
++		err = -ENODEV;
++	}
+ #endif
+ 	if (err) {
+ #ifdef CONFIG_SPL_LIBCOMMON_SUPPORT
+-		printf("spl: could not find mmc device. error: %d\n", err);
++		printf("spl: could not find mmc device %d after %d tries. error: %d\n",
++		       mmc_dev, max_attempts, err);
+ #endif
+ 		return err;
+ 	}

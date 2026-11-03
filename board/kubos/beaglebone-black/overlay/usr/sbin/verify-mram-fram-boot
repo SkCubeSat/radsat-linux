@@ -2,7 +2,8 @@
 # On-target smoke checks for MRAM env + FRAM anti-brick layout.
 # Run after boot: verify-mram-fram-boot
 # BusyBox-safe: no head/cut required for the bootcmd gate.
-set -eu
+set -e
+# BusyBox ash rejects `set -eu` as a single token.
 
 echo "=== fw_printenv (MRAM-synced /envar) ==="
 bootcmd_line=$(fw_printenv bootcmd 2>/dev/null || true)

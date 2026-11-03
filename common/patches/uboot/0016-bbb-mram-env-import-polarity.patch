@@ -1,0 +1,44 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Mon, 2 Nov 2026 22:00:00 -0600
+Subject: [PATCH] env_mram: fix env_import success polarity
+
+U-Boot env_import() returns 1 on success and 0 on failure. The MRAM
+loader treated 0 as success, so a valid SPI env was discarded and the
+boot path fell through to broken EXT4 then defaults. Match env_sf.c.
+
+---
+
+diff --git a/common/env_mram.c b/common/env_mram.c
+--- a/common/env_mram.c
++++ b/common/env_mram.c
+@@ -170,8 +170,9 @@
+ 	int i, ret;
+ 
+ 	for (i = 0; parts[i]; i++) {
++		/* env_import returns 1 on success, 0 on failure */
+ 		ret = env_import_ext4_one(parts[i]);
+-		if (!ret)
++		if (ret)
+ 			return 0;
+ 	}
+ 	return -ENODEV;
+@@ -226,11 +227,16 @@
+ 		ret = mram_read(slave, CONFIG_ENV_MRAM_OFFSET, buf,
+ 				CONFIG_ENV_SIZE);
+ 		spi_free_slave(slave);
+-		if (!ret && !env_import(buf, 1)) {
++		if (ret) {
++			printf("Env: MRAM SPI read failed (%d), trying EXT4\n",
++			       ret);
++		} else if (env_import(buf, 1)) {
++			/* env_import: 1 = success, 0 = failure */
+ 			puts("Env: loaded from SPI MRAM\n");
+ 			return;
++		} else {
++			puts("Env: MRAM CRC/import failed, trying EXT4\n");
+ 		}
+-		puts("Env: MRAM CRC/import failed, trying EXT4\n");
+ 	} else {
+ 		puts("Env: MRAM SPI unavailable, trying EXT4\n");
+ 	}

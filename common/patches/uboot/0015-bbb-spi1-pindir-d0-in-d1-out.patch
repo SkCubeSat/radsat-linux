@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Mon, 2 Nov 2026 21:55:00 -0600
+Subject: [PATCH] spi: omap3: BBB SPI1 D0=MISO D1=MOSI
+
+Non-DM omap3_spi defaulted to D0_OUT_D1_IN. RadSat wiring / Linux
+beaglebone-black.dts uses D0 as MISO and D1 as MOSI, so U-Boot could
+write (or appear to) while reads returned garbage and env CRC failed.
+Match Linux pin direction.
+
+---
+
+diff --git a/drivers/spi/omap3_spi.c b/drivers/spi/omap3_spi.c
+--- a/drivers/spi/omap3_spi.c
++++ b/drivers/spi/omap3_spi.c
+@@ -569,7 +569,11 @@
+ 	priv->mode = mode;
+ 	priv->wordlen = priv->slave.wordlen;
+ #ifdef CONFIG_OMAP3_SPI_D0_D1_SWAPPED
+-	priv->pin_dir = MCSPI_PINDIR_D0_OUT_D1_IN;
++	/*
++	 * RadSat BBB SPI1 (spidev1.0): D0=MISO, D1=MOSI — matches Linux
++	 * beaglebone-black.dts spi1_pins (0x194 input, 0x198 output).
++	 */
++	priv->pin_dir = MCSPI_PINDIR_D0_IN_D1_OUT;
+ #endif
+ 
+ 	return &priv->slave;
