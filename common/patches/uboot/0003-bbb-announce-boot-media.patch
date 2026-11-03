@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Thu, 29 Oct 2026 16:50:00 -0600
+Subject: [PATCH] arm: am33xx: announce SD vs eMMC before starting Linux
+
+The SD card may hold multiple image copies for backup/recovery. Print
+the MMC bootpart (device:partition) clearly before bootm so operators
+know which SD copy is starting Linux, versus a plain eMMC boot.
+
+---
+diff --git a/include/configs/beaglebone-black.h b/include/configs/beaglebone-black.h
+index abcd124..abcd125 100644
+--- a/include/configs/beaglebone-black.h
++++ b/include/configs/beaglebone-black.h
+@@ -103,20 +103,34 @@
+     "bootfile=kernel\0" \
+     "console=ttyS0,115200\0" \
+     "optargs=\0" \
++    "announce_boot=" \
++        "if test ${mmcdev} -eq 0; then " \
++            "echo Booting Linux from SD card image copy \\(mmc ${bootpart}\\); " \
++        "else " \
++            "echo Booting Linux from eMMC \\(mmc ${bootpart}\\); " \
++        "fi\0" \
+     "loadimage=fatload mmc ${mmcdev}:1 ${loadaddr} /${bootfile}\0" \
+     "loadfdt=fatload mmc ${mmcdev}:1 ${fdtaddr} /${board}.dtb\0" \
+-    "mmcloados=run args_mmc; " \
++    "mmcloados=run args_mmc; run announce_boot; " \
+         "if run loadfdt; then " \
+             "bootm ${loadaddr} - ${fdtaddr}; " \
+         "else " \
+             "echo ERROR: Failed to load ${board}.dtb; " \
+         "fi;\0" \
+     "mmcboot=mmc dev ${mmcdev}; " \
+         "if mmc rescan; then " \
+-            "echo SD/MMC found on device ${mmcdev};" \
++            "if test ${mmcdev} -eq 0; then " \
++                "echo Found SD card on mmc ${mmcdev} \\(multi-copy image media\\); " \
++            "else " \
++                "echo Found eMMC on mmc ${mmcdev}; " \
++            "fi; " \
+             "if run loadimage; then " \
+                 "run mmcloados;" \
+             "fi;" \
+         "fi;\0" \
+     NETARGS \
+     BOOTENV \
+     KUBOS_UPDATE_ARGS

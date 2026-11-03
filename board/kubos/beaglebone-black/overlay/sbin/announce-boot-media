@@ -1,0 +1,65 @@
+#!/bin/sh
+#
+# Early userspace banner: which media/partition the rootfs is on.
+# SD cards may carry multiple image copies, so the partition number matters.
+#
+
+root_src=$(awk '$2 == "/" { print $1; exit }' /proc/mounts)
+cmdline_root=""
+partuuid=""
+
+if [ -r /proc/cmdline ]; then
+	cmdline_root=$(sed -n 's/.*root=\([^ ]*\).*/\1/p' /proc/cmdline)
+	case "$cmdline_root" in
+		PARTUUID=*)
+			partuuid=${cmdline_root#PARTUUID=}
+			;;
+	esac
+fi
+
+# Prefer resolving PARTUUID to the real block device (BusyBox findfs if present).
+if [ -n "$partuuid" ]; then
+	if command -v findfs >/dev/null 2>&1; then
+		resolved=$(findfs "PARTUUID=$partuuid" 2>/dev/null) || resolved=""
+		[ -n "$resolved" ] && root_src=$resolved
+	elif [ -e "/dev/disk/by-partuuid/$partuuid" ]; then
+		root_src=$(readlink -f "/dev/disk/by-partuuid/$partuuid" 2>/dev/null || echo "/dev/disk/by-partuuid/$partuuid")
+	fi
+fi
+
+if [ -z "$root_src" ] || [ "$root_src" = "/dev/root" ] || [ "$root_src" = "rootfs" ]; then
+	echo "Boot media: unknown (root=$cmdline_root)"
+	exit 0
+fi
+
+name=$(basename "$root_src")
+case "$name" in
+	mmcblk*p*)
+		disk=${name%%p*}
+		part=${name#*p}
+		;;
+	*)
+		echo "Boot media: $root_src"
+		exit 0
+		;;
+esac
+
+typ=$(cat "/sys/block/${disk}/device/type" 2>/dev/null || echo unknown)
+dev="${disk}p${part}"
+
+case "$typ" in
+	SD)
+		echo "Boot media: SD card image copy on partition ${part} (${dev})"
+		;;
+	MMC)
+		echo "Boot media: eMMC partition ${part} (${dev})"
+		;;
+	*)
+		echo "Boot media: ${dev} (type=${typ})"
+		;;
+esac
+
+if [ -n "$partuuid" ]; then
+	echo "Boot root PARTUUID=${partuuid}"
+fi
+exit 0

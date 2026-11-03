@@ -14,14 +14,68 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Copy the Kubos image from the boot SD (mmcblk0) onto on-board eMMC
-# (mmcblk1). Only the used partition span is copied (not the full SD
-# size), then the eMMC MBR disk ID is changed so PARTUUID mounts cannot
-# collide while both media are present.
+# Install / mirror Kubos images between SD and eMMC, and create raw
+# backup image copies in unused SD space when capacity allows.
+#
+# Usage:
+#   install-os                         # interactive menu
+#   install-os sd-to-emmc [-y]
+#   install-os emmc-to-sd [-y] [--backups]
+#   install-os sd-backups [-y]         # clone SD primary into free SD space
+#   install-os status
+#
+# SD backups are whole-image clones at sector offsets N * image_span.
+# Slot 0 is the live primary (MBR + partitions). Slots 1..K live in
+# unused space after the primary span and are for restore/recovery.
 #
 
-SD=/dev/mmcblk0
-EMMC=/dev/mmcblk1
+set -e
+
+YES=0
+DO_BACKUPS=0
+MODE=""
+
+usage() {
+    cat <<'EOF'
+Usage: install-os [command] [options]
+
+Commands:
+  sd-to-emmc     Copy SD primary image span onto eMMC (default)
+  emmc-to-sd     Copy eMMC image span onto SD primary
+  sd-backups     Create raw backup copies of the SD primary in free SD space
+  status         Show media sizes, image span, and possible SD backup slots
+  (none)         Interactive menu
+
+Options:
+  -y, --yes      Skip confirmation
+  --backups      With emmc-to-sd, also fill free SD space with backup copies
+  -h, --help     Show this help
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        sd-to-emmc|emmc-to-sd|sd-backups|status)
+            MODE=$1
+            ;;
+        -y|--yes)
+            YES=1
+            ;;
+        --backups)
+            DO_BACKUPS=1
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "install-os: unknown argument: $1" >&2
+            usage >&2
+            exit 2
+            ;;
+    esac
+    shift
+done
 
 euid=""
 while read -r key _real e _saved _fs; do
@@ -35,94 +89,383 @@ if [ "$euid" != "0" ]; then
     exit 1
 fi
 
-if [ ! -b "$SD" ] || [ ! -b "$EMMC" ]; then
-    echo "install-os: need $SD (SD) and $EMMC (eMMC)" >&2
-    exit 1
-fi
-
-sd_type=$(cat /sys/block/mmcblk0/device/type 2>/dev/null)
-emmc_type=$(cat /sys/block/mmcblk1/device/type 2>/dev/null)
-if [ "$sd_type" != "SD" ] || [ "$emmc_type" != "MMC" ]; then
-    echo "install-os: unexpected media types (mmcblk0=$sd_type mmcblk1=$emmc_type)" >&2
-    echo "install-os: refusing to continue" >&2
-    exit 1
-fi
-
-echo "** Warning ** This will wipe the current contents of the eMMC ($EMMC)"
-echo "Are you sure you want to proceed? (y/N)"
-read ANSWER
-# shellcheck disable=SC3010
-if [ "$ANSWER" = "${ANSWER#[Yy]}" ]; then
-    echo "Cancelling installation."
-    exit 0
-fi
-
-# Prevent Monit from respawning services for the duration of the copy.
-mkdir -p /run
-touch /run/shutting-down
-echo "OS Install: Stopping Monit"
-monit quit 2>/dev/null || true
-killall monit 2>/dev/null || true
-sleep 1
-
-echo "OS Install: Stopping running services"
-for i in /var/run/*.pid; do
-    [ -f "$i" ] || continue
-    kill -15 "$(cat "$i")" 2>/dev/null || true
-done
-killall -15 python 2>/dev/null || true
-sleep 2
-
-echo "OS Install: Unmounting Kubos volumes"
-umount -l /home/microsd 2>/dev/null || true
-umount -l /upgrade 2>/dev/null || true
-umount -l /envar 2>/dev/null || true
-umount -l /home 2>/dev/null || true
-umount -l ${EMMC}p* 2>/dev/null || true
-
-# Copy only through the end of the last SD partition, capped by eMMC size.
-# A full-disk dd of a larger SD hits unused (and sometimes bad) sectors and
-# also wastes hours writing empty space.
-END=0
-for p in /sys/block/mmcblk0/mmcblk0p*; do
-    [ -d "$p" ] || continue
-    start=$(cat "$p/start")
-    size=$(cat "$p/size")
-    part_end=$((start + size))
-    if [ "$part_end" -gt "$END" ]; then
-        END=$part_end
+# Resolve SD vs eMMC by sysfs type, not by assuming mmcblk0/1 order.
+SD=""
+EMMC=""
+for dev in /sys/block/mmcblk*; do
+    [ -d "$dev" ] || continue
+    name=$(basename "$dev")
+    case "$name" in
+        mmcblk*boot*|mmcblk*rpmb*) continue ;;
+    esac
+    typ=$(cat "$dev/device/type" 2>/dev/null) || continue
+    if [ "$typ" = "SD" ] && [ -z "$SD" ]; then
+        SD="/dev/$name"
+    elif [ "$typ" = "MMC" ] && [ -z "$EMMC" ]; then
+        EMMC="/dev/$name"
     fi
 done
 
-if [ "$END" -le 0 ]; then
-    echo "install-os: no partitions found on $SD" >&2
-    exit 1
+need_both() {
+    if [ -z "$SD" ] || [ -z "$EMMC" ]; then
+        echo "install-os: need one SD and one eMMC (found SD='$SD' eMMC='$EMMC')" >&2
+        exit 1
+    fi
+}
+
+need_sd() {
+    if [ -z "$SD" ] || [ ! -b "$SD" ]; then
+        echo "install-os: need an SD card" >&2
+        exit 1
+    fi
+}
+
+image_span_sectors() {
+    # End of last partition on $1 (sysfs block name), in 512-byte sectors.
+    _disk=$1
+    _end=0
+    for _p in /sys/block/${_disk}/${_disk}p*; do
+        [ -d "$_p" ] || continue
+        _start=$(cat "$_p/start")
+        _size=$(cat "$_p/size")
+        _part_end=$((_start + _size))
+        if [ "$_part_end" -gt "$_end" ]; then
+            _end=$_part_end
+        fi
+    done
+    echo "$_end"
+}
+
+root_disk_name() {
+    _src=$(awk '$2 == "/" { print $1; exit }' /proc/mounts)
+    _name=$(basename "$_src")
+    case "$_name" in
+        mmcblk*p*)
+            echo "${_name%%p*}"
+            ;;
+        mmcblk*)
+            echo "$_name"
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
+}
+
+confirm() {
+    _msg=$1
+    if [ "$YES" -eq 1 ]; then
+        return 0
+    fi
+    echo "** Warning ** $_msg"
+    echo "Are you sure you want to proceed? (y/N)"
+    read ANSWER
+    case "$ANSWER" in
+        y|Y|yes|YES|Yes) return 0 ;;
+        *)
+            echo "Cancelling."
+            exit 0
+            ;;
+    esac
+}
+
+stop_services() {
+    mkdir -p /run
+    touch /run/shutting-down
+    echo "OS Install: Stopping Monit"
+    monit quit 2>/dev/null || true
+    killall monit 2>/dev/null || true
+    sleep 1
+
+    echo "OS Install: Stopping running services"
+    for i in /var/run/*.pid; do
+        [ -f "$i" ] || continue
+        kill -15 "$(cat "$i")" 2>/dev/null || true
+    done
+    killall -15 python 2>/dev/null || true
+    sleep 2
+}
+
+umount_kubos() {
+    echo "OS Install: Unmounting Kubos volumes"
+    umount -l /home/microsd 2>/dev/null || true
+    umount -l /upgrade 2>/dev/null || true
+    umount -l /envar 2>/dev/null || true
+    umount -l /home 2>/dev/null || true
+    if [ -n "$1" ]; then
+        umount -l ${1}p* 2>/dev/null || true
+    fi
+    if [ -n "$2" ]; then
+        umount -l ${2}p* 2>/dev/null || true
+    fi
+}
+
+dd_span() {
+    _if=$1
+    _of=$2
+    _count=$3
+    _seek=${4:-0}
+    _skip=${5:-0}
+    _mb=$((_count / 2048))
+    echo "OS Install: dd ${_count} sectors (~${_mb} MiB) if=$_if of=$_of skip=$_skip seek=$_seek"
+    if [ -x /usr/bin/pv ]; then
+        dd if="$_if" bs=512 skip="$_skip" count="$_count" 2>/dev/null \
+            | pv -s $((_count * 512)) \
+            | dd of="$_of" bs=512 seek="$_seek"
+    else
+        dd if="$_if" of="$_of" bs=512 skip="$_skip" seek="$_seek" count="$_count"
+    fi
+    sync
+}
+
+# MBR disk signature at offset 440. Kubos SD primary uses KLNX (0x4B4C4E58).
+# eMMC gets YNLK so PARTUUIDs do not collide while both media are present.
+set_disk_signature_emmc() {
+    echo "OS Install: Assigning unique eMMC disk signature (YNLK)"
+    printf '\131\116\114\113' | dd of="$1" bs=1 seek=440 count=4 conv=notrunc 2>/dev/null
+    sync
+}
+
+set_disk_signature_sd() {
+    # 0x4B4C4E58 ("KLNX") little-endian on disk: 58 4E 4C 4B
+    echo "OS Install: Restoring SD primary disk signature (KLNX)"
+    printf '\130\116\114\113' | dd of="$1" bs=1 seek=440 count=4 conv=notrunc 2>/dev/null
+    sync
+}
+
+write_slot_map() {
+    _span=$1
+    _slots=$2
+    _map=/tmp/sd-image-slots.txt
+    {
+        echo "# SD raw image slots (512-byte sectors). Slot 0 is the live primary."
+        echo "# Restore backup N onto primary with:"
+        echo "#   dd if=<sd> of=<sd> bs=512 skip=\$((N*SPAN)) count=SPAN"
+        echo "span_sectors=$_span"
+        _i=0
+        while [ "$_i" -lt "$_slots" ]; do
+            _off=$((_i * _span))
+            if [ "$_i" -eq 0 ]; then
+                echo "slot$_i offset=$_off sectors=$_span role=primary"
+            else
+                echo "slot$_i offset=$_off sectors=$_span role=backup"
+            fi
+            _i=$((_i + 1))
+        done
+    } > "$_map"
+    echo "OS Install: Slot map written to $_map"
+    # Best-effort persist onto /home if it is still mounted or remountable.
+    if mount | grep -q ' on /home '; then
+        cp "$_map" /home/sd-image-slots.txt 2>/dev/null || true
+    fi
+}
+
+show_status() {
+    need_sd
+    SD_NAME=$(basename "$SD")
+    SD_BLOCKS=$(cat /sys/block/${SD_NAME}/size)
+    SPAN=$(image_span_sectors "$SD_NAME")
+    echo "SD:     $SD  (${SD_BLOCKS} sectors, $((SD_BLOCKS / 2048)) MiB)"
+    if [ -n "$EMMC" ]; then
+        EMMC_NAME=$(basename "$EMMC")
+        EMMC_BLOCKS=$(cat /sys/block/${EMMC_NAME}/size)
+        EMMC_SPAN=$(image_span_sectors "$EMMC_NAME")
+        echo "eMMC:   $EMMC  (${EMMC_BLOCKS} sectors, $((EMMC_BLOCKS / 2048)) MiB)"
+        echo "eMMC image span: ${EMMC_SPAN} sectors (~$((EMMC_SPAN / 2048)) MiB)"
+    else
+        echo "eMMC:   (not present)"
+    fi
+    echo "SD image span:  ${SPAN} sectors (~$((SPAN / 2048)) MiB)"
+    if [ "$SPAN" -le 0 ]; then
+        echo "SD backup slots: none (no partitions)"
+        return 0
+    fi
+    SLOTS=$((SD_BLOCKS / SPAN))
+    if [ "$SLOTS" -lt 1 ]; then
+        SLOTS=1
+    fi
+    echo "SD backup capacity: ${SLOTS} full image slot(s) (slot0=primary, $((SLOTS - 1)) backup(s))"
+    _i=0
+    while [ "$_i" -lt "$SLOTS" ]; do
+        _off=$((_i * SPAN))
+        if [ "$_i" -eq 0 ]; then
+            echo "  slot$_i  sectors ${_off}..$((_off + SPAN - 1))  primary"
+        else
+            echo "  slot$_i  sectors ${_off}..$((_off + SPAN - 1))  backup"
+        fi
+        _i=$((_i + 1))
+    done
+    ROOT=$(root_disk_name)
+    if [ -n "$ROOT" ]; then
+        echo "Currently root on: $ROOT"
+    fi
+}
+
+create_sd_backups_from() {
+    # Clone source image span onto SD slots 1..N-1. Slot 0 left alone unless SRC is foreign.
+    _src=$1
+    _src_span=$2
+    need_sd
+    SD_NAME=$(basename "$SD")
+    SD_BLOCKS=$(cat /sys/block/${SD_NAME}/size)
+
+    if [ "$_src_span" -le 0 ]; then
+        echo "install-os: source image span is empty" >&2
+        exit 1
+    fi
+    if [ "$_src_span" -gt "$SD_BLOCKS" ]; then
+        echo "install-os: image span ($_src_span) larger than SD ($SD_BLOCKS)" >&2
+        exit 1
+    fi
+
+    SLOTS=$((SD_BLOCKS / _src_span))
+    if [ "$SLOTS" -lt 2 ]; then
+        echo "OS Install: SD does not have enough free space for a backup copy"
+        echo "            need >= $((_src_span * 2)) sectors, have $SD_BLOCKS"
+        return 0
+    fi
+
+    echo "OS Install: Creating $((SLOTS - 1)) SD backup slot(s) (${_src_span} sectors each)"
+    _i=1
+    while [ "$_i" -lt "$SLOTS" ]; do
+        _seek=$((_i * _src_span))
+        echo "OS Install: Writing SD backup slot $_i at sector $_seek"
+        dd_span "$_src" "$SD" "$_src_span" "$_seek" 0
+        _i=$((_i + 1))
+    done
+    write_slot_map "$_src_span" "$SLOTS"
+}
+
+do_sd_to_emmc() {
+    need_both
+    SD_NAME=$(basename "$SD")
+    EMMC_NAME=$(basename "$EMMC")
+    SPAN=$(image_span_sectors "$SD_NAME")
+    EMMC_BLOCKS=$(cat /sys/block/${EMMC_NAME}/size)
+
+    if [ "$SPAN" -le 0 ]; then
+        echo "install-os: no partitions found on $SD" >&2
+        exit 1
+    fi
+    if [ "$SPAN" -gt "$EMMC_BLOCKS" ]; then
+        echo "install-os: SD image span ($SPAN) larger than eMMC ($EMMC_BLOCKS)" >&2
+        exit 1
+    fi
+
+    confirm "This will wipe eMMC ($EMMC) and copy ${SPAN} sectors from SD ($SD)."
+    stop_services
+    umount_kubos "$EMMC" ""
+    dd_span "$SD" "$EMMC" "$SPAN" 0 0
+    set_disk_signature_emmc "$EMMC"
+    echo "OS Install: Done (SD -> eMMC)."
+    echo "Power off, remove the SD card, then boot from eMMC alone."
+    echo "While the SD is still inserted, ROM/SPL will prefer the SD."
+}
+
+do_emmc_to_sd() {
+    need_both
+    SD_NAME=$(basename "$SD")
+    EMMC_NAME=$(basename "$EMMC")
+    SPAN=$(image_span_sectors "$EMMC_NAME")
+    SD_BLOCKS=$(cat /sys/block/${SD_NAME}/size)
+    ROOT=$(root_disk_name)
+
+    if [ "$SPAN" -le 0 ]; then
+        echo "install-os: no partitions found on $EMMC" >&2
+        exit 1
+    fi
+    if [ "$SPAN" -gt "$SD_BLOCKS" ]; then
+        echo "install-os: eMMC image span ($SPAN) larger than SD ($SD_BLOCKS)" >&2
+        exit 1
+    fi
+
+    if [ "$ROOT" = "$SD_NAME" ]; then
+        echo "install-os: rootfs is on the SD ($SD_NAME); refusing to overwrite SD primary." >&2
+        echo "install-os: boot from eMMC (no SD) or use: install-os sd-backups" >&2
+        exit 1
+    fi
+
+    _msg="This will wipe SD primary ($SD) and copy ${SPAN} sectors from eMMC ($EMMC)."
+    if [ "$DO_BACKUPS" -eq 1 ]; then
+        _msg="$_msg Backup slots will also be filled if SD space allows."
+    fi
+    confirm "$_msg"
+
+    stop_services
+    umount_kubos "$SD" "$EMMC"
+    dd_span "$EMMC" "$SD" "$SPAN" 0 0
+    set_disk_signature_sd "$SD"
+
+    if [ "$DO_BACKUPS" -eq 1 ]; then
+        create_sd_backups_from "$EMMC" "$SPAN"
+    else
+        # Still record that slot0 exists; backups may be added later.
+        write_slot_map "$SPAN" 1
+    fi
+
+    echo "OS Install: Done (eMMC -> SD)."
+    echo "SD primary is a KLNX image; use install-os sd-backups to fill free space."
+}
+
+do_sd_backups() {
+    need_sd
+    SD_NAME=$(basename "$SD")
+    SPAN=$(image_span_sectors "$SD_NAME")
+    if [ "$SPAN" -le 0 ]; then
+        echo "install-os: no partitions found on $SD" >&2
+        exit 1
+    fi
+
+    confirm "This will write raw backup image copies into free space on $SD (primary slot0 untouched)."
+    stop_services
+    # Unmount data volumes so /home is quiet; do not need to unmount root.
+    umount_kubos "" ""
+    # Source is the SD primary itself (skip=0).
+    create_sd_backups_from "$SD" "$SPAN"
+    echo "OS Install: Done (SD backup slots)."
+}
+
+interactive() {
+    show_status
+    echo
+    echo "Select action:"
+    echo "  1) SD -> eMMC          (install onboard flash from SD)"
+    echo "  2) eMMC -> SD          (refresh SD primary from eMMC)"
+    echo "  3) eMMC -> SD+backups  (refresh SD and fill backup slots)"
+    echo "  4) SD backups only     (clone SD primary into free SD space)"
+    echo "  5) Status only / quit"
+    echo -n "Choice [1-5]: "
+    read CHOICE
+    case "$CHOICE" in
+        1) MODE=sd-to-emmc ;;
+        2) MODE=emmc-to-sd; DO_BACKUPS=0 ;;
+        3) MODE=emmc-to-sd; DO_BACKUPS=1 ;;
+        4) MODE=sd-backups ;;
+        *) exit 0 ;;
+    esac
+}
+
+if [ -z "$MODE" ]; then
+    interactive
 fi
 
-EMMC_BLOCKS=$(cat /sys/block/mmcblk1/size)
-if [ "$END" -gt "$EMMC_BLOCKS" ]; then
-    echo "install-os: SD image span ($END sectors) larger than eMMC ($EMMC_BLOCKS)" >&2
-    exit 1
-fi
+case "$MODE" in
+    status)
+        show_status
+        ;;
+    sd-to-emmc)
+        do_sd_to_emmc
+        ;;
+    emmc-to-sd)
+        do_emmc_to_sd
+        ;;
+    sd-backups)
+        do_sd_backups
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac
 
-MB=$((END / 2048))
-echo "OS Install: Copying ${END} sectors (~${MB} MiB) from $SD to $EMMC"
-
-if [ -x /usr/bin/pv ]; then
-    dd if="$SD" bs=512 count="$END" 2>/dev/null | pv -s $((END * 512)) | dd of="$EMMC" bs=512
-else
-    dd if="$SD" of="$EMMC" bs=512 count="$END"
-fi
-sync
-
-# MBR disk signature lives at offset 440. Kubos SD images use 0x4B4C4E58
-# ("KLNX"). Give the eMMC a different ID so PARTUUID=4b4c4e58-* only
-# matches the SD while both are inserted.
-echo "OS Install: Assigning unique eMMC disk signature"
-printf '\x59\x4e\x4c\x4b' | dd of="$EMMC" bs=1 seek=440 count=4 conv=notrunc 2>/dev/null
-sync
-
-echo "OS Install: Done."
-echo "Power off, remove the SD card, then boot from eMMC alone."
-echo "While the SD is still inserted, ROM/SPL will prefer the SD."
 exit 0

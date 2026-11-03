@@ -11,3 +11,4 @@
 /sbin/halt              f   700 0   0   -   -   -   -   -
 /sbin/poweroff          f   700 0   0   -   -   -   -   -
 /sbin/flush-filesystems f   700 0   0   -   -   -   -   -
+/sbin/announce-boot-media f 755 0   0   -   -   -   -   -

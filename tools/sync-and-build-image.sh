@@ -38,6 +38,7 @@ sync_one common/overlay/sbin/reboot
 rm -f "$DST/common/patches/uboot/0001-bbb-console-500000.patch"
 sync_one common/patches/uboot/0001-bbb-console-115200.patch
 sync_one common/patches/uboot/0002-bbb-env-on-boot-mmc.patch
+sync_one common/patches/uboot/0003-bbb-announce-boot-media.patch
 
 chmod +x "$DST/board/kubos/beaglebone-black/overlay/sbin/monit-respawn"
 chmod +x "$DST/common/overlay/sbin/flush-filesystems"

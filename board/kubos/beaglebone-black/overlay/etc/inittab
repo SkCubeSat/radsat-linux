@@ -42,6 +42,8 @@
 ::sysinit:/bin/sh -c 'mount /home/microsd 2>/dev/null || true'
 ::sysinit:/bin/sh -c 'mount /upgrade 2>/dev/null || true'
 ::sysinit:/bin/mount /envar
+# Announce whether rootfs is on SD or eMMC (after mounts are real).
+::sysinit:/sbin/announce-boot-media
 # Setup hostname
 ::sysinit:/bin/hostname -F /etc/hostname
 # now run any rc scripts
