@@ -32,10 +32,21 @@ curl -s http://127.0.0.1:8090/ -H 'Content-Type: application/json' \
   -d '{"query":"{ envRegion { offset size payloadCapacityBytes crcValid crc } }"}' || true
 echo
 
-echo "=== fram mission state ==="
+echo "=== fram mission + recovery state ==="
 fram-get 2>/dev/null || curl -s http://127.0.0.1:8091/ -H 'Content-Type: application/json' \
-  -d '{"query":"{ missionState { fsooTimer deployed removeBeforeFlight } health { bootChecksumValid } }"}'
+  -d '{"query":"{ missionState { fsooTimer deployed removeBeforeFlight totalBootFails emmcRecoveryNeeded bootMedia bootImageId } memoryMap { layoutVersion } health { bootChecksumValid } }"}'
 echo
+
+echo "=== layout version gate ==="
+layout=$(fram-get 2>/dev/null | awk -F': ' '/layoutVersion:/{print $2; exit}')
+case "$layout" in
+	4|4,*)
+		echo "OK: FRAM layoutVersion=$layout"
+		;;
+	*)
+		echo "WARN: expected layoutVersion 4, got '$layout'"
+		;;
+esac
 
 echo "Anti-brick notes:"
 echo " 1) Corrupt FRAM (bad CRC) must still boot Linux; U-Boot warns and skips overlay."
@@ -43,3 +54,5 @@ echo " 2) U-Boot: saveenv then reset — env must persist from MRAM; fw_printenv
 echo " 3) fram-set fsoo_timer 42; reboot; U-Boot printenv fsoo_timer == 42 when CRC valid."
 echo " 4) Never use i2c0/0x50 (cape EEPROM); FRAM is i2c-2/0x50."
 echo " 5) Never Phase-3 U-Boot flash while bootcmd contains bootp/nfs."
+echo " 6) total_boot_fails is lifetime; emmc_recovery_needed forces SD until verify."
+echo " 7) install-os auto-recover / sd-to-emmc latches FRAM before writing eMMC."

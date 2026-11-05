@@ -31,7 +31,12 @@ mkdir -p /run
 touch /run/shutting-down
 killall monit 2>/dev/null || true
 
+# Only report real failures to the console (arming the reboot WDT is normal).
 say() {
+    echo "flush-filesystems: $*" > /dev/console 2>/dev/null
+}
+
+say_fail() {
     echo "flush-filesystems: $*" > /dev/console 2>/dev/null
 }
 
@@ -59,16 +64,16 @@ arm_watchdog() {
     if [ -n "$best" ]; then
         sys=$best
     else
-        say "omap_wdt not found"
+        say_fail "omap_wdt not found"
         return
     fi
 
     # One byte that is not V. Open starts the timer, the write is a
     # keepalive, and close without the magic character leaves it armed.
-    if ( printf 'x' >&9 ) 9<>"$sys" 2>/dev/null; then
-        say "armed $sys"
-    else
-        say "failed to open $sys"
+    # Intentionally silent on success — kernel "watchdog did not stop"
+    # is expected during reboot and is not an error.
+    if ! ( printf 'x' >&9 ) 9<>"$sys" 2>/dev/null; then
+        say_fail "failed to open $sys"
     fi
 }
 

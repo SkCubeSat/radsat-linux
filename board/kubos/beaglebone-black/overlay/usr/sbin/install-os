@@ -22,11 +22,19 @@
 #   install-os sd-to-emmc [-y]
 #   install-os emmc-to-sd [-y] [--backups]
 #   install-os sd-backups [-y]         # clone SD primary into free SD space
+#   install-os auto-recover [-y]       # power-loss-safe SD->eMMC for FRAM latch
 #   install-os status
 #
 # SD backups are whole-image clones at sector offsets N * image_span.
 # Slot 0 is the live primary (MBR + partitions). Slots 1..K live in
 # unused space after the primary span and are for restore/recovery.
+#
+# Power-loss safety (sd-to-emmc / auto-recover):
+#   1) Latch FRAM emmc_recovery_needed=true BEFORE writing eMMC
+#   2) Copy SD -> eMMC
+#   3) sync + verify eMMC has a bootable FAT kernel
+#   4) Only then clear emmc_recovery_needed and set boot_media=0
+# A cut mid-copy leaves the latch set so the next boot still prefers SD.
 #
 
 # NEVER use `set -e` with BusyBox ash on this image. Several common
@@ -54,6 +62,7 @@ Commands:
   sd-to-emmc     Copy SD primary image span onto eMMC (default)
   emmc-to-sd     Copy eMMC image span onto SD primary
   sd-backups     Create raw backup copies of the SD primary in free SD space
+  auto-recover   Power-loss-safe SD->eMMC used when FRAM recovery is latched
   status         Show media sizes, image span, and possible SD backup slots
   (none)         Interactive menu
 
@@ -66,7 +75,7 @@ EOF
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        sd-to-emmc|emmc-to-sd|sd-backups|status)
+        sd-to-emmc|emmc-to-sd|sd-backups|auto-recover|status)
             MODE=$1
             ;;
         -y|--yes)
@@ -410,6 +419,41 @@ essential_span_sectors() {
     image_span_sectors "$_disk"
 }
 
+fram_latch_recovery() {
+    if [ -x /usr/sbin/fram-set ]; then
+        /usr/sbin/fram-set emmc_recovery_needed true 2>/dev/null || true
+        echo "OS Install: FRAM emmc_recovery_needed=true (power-cut safe)"
+    else
+        echo "OS Install: fram-set missing; continuing without FRAM latch" >&2
+    fi
+}
+
+fram_clear_recovery_after_verify() {
+    if [ -x /usr/sbin/fram-set ]; then
+        /usr/sbin/fram-set last_emmc_probe_ok true 2>/dev/null || true
+        /usr/sbin/fram-set boot_media 0 2>/dev/null || true
+        /usr/sbin/fram-set emmc_recovery_needed false 2>/dev/null || true
+        echo "OS Install: FRAM recovery latch cleared after eMMC verify"
+    fi
+}
+
+verify_emmc_bootable() {
+    EMMC_NAME=$(basename "$EMMC")
+    # Prefer a mounted or temporary mount of eMMC boot (p1) with a kernel file.
+    _mp=/tmp/install-os-emmc-boot
+    mkdir -p "$_mp"
+    umount "$_mp" 2>/dev/null || true
+    if mount -t vfat "${EMMC}p1" "$_mp" 2>/dev/null || mount "${EMMC}p1" "$_mp" 2>/dev/null; then
+        if [ -f "$_mp/kernel" ] || [ -f "$_mp/uImage" ] || [ -f "$_mp/zImage" ]; then
+            umount "$_mp" 2>/dev/null || true
+            return 0
+        fi
+        umount "$_mp" 2>/dev/null || true
+    fi
+    echo "install-os: eMMC boot partition verify failed (no kernel)" >&2
+    return 1
+}
+
 do_sd_to_emmc() {
     need_both
     SD_NAME=$(basename "$SD")
@@ -439,15 +483,18 @@ do_sd_to_emmc() {
     fi
 
     confirm "This will wipe eMMC ($EMMC) and copy ${SPAN} sectors (~$((SPAN / 2048)) MiB) from SD ($SD), then mkfs /home."
+    # Latch BEFORE any eMMC write so a power cut mid-copy still boots SD.
+    fram_latch_recovery
     stop_services
     umount_kubos "$EMMC" ""
     dd_span "$SD" "$EMMC" "$SPAN" 0 0
+    sync
     set_disk_signature_emmc "$EMMC"
+    sync
+    command -v partx >/dev/null 2>&1 && partx -u "$EMMC" 2>/dev/null
     # Partition table still describes p4; format a fresh empty /home.
     if [ -b "${EMMC}p4" ] || [ "$FULL_SPAN" -gt "$SPAN" ]; then
         echo "OS Install: Creating fresh ext4 on ${EMMC}p4 (/home)"
-        # part nodes may lag; force rescan
-        command -v partx >/dev/null 2>&1 && partx -u "$EMMC" 2>/dev/null
         i=0
         while [ "$i" -lt 10 ] && [ ! -b "${EMMC}p4" ]; do
             sleep 1
@@ -459,9 +506,20 @@ do_sd_to_emmc() {
             echo "install-os: ${EMMC}p4 not visible yet; reboot into eMMC then mkfs.ext4 ${EMMC}p4 if /home fails" >&2
         fi
     fi
+    sync
+    if ! verify_emmc_bootable; then
+        echo "install-os: leaving emmc_recovery_needed set; reboot will stay on SD" >&2
+        exit 1
+    fi
+    fram_clear_recovery_after_verify
     echo "OS Install: Done (SD -> eMMC)."
-    echo "Power off, remove the SD card, then boot from eMMC alone."
-    echo "While the SD is still inserted, ROM/SPL will prefer the SD."
+    echo "Reboot to eMMC (recovery latch cleared). SD may remain inserted."
+}
+
+do_auto_recover() {
+    YES=1
+    echo "OS Install: auto-recover (FRAM-latched SD->eMMC)"
+    do_sd_to_emmc
 }
 
 do_emmc_to_sd() {
@@ -557,6 +615,9 @@ case "$MODE" in
         ;;
     sd-to-emmc)
         do_sd_to_emmc
+        ;;
+    auto-recover)
+        do_auto_recover
         ;;
     emmc-to-sd)
         do_emmc_to_sd

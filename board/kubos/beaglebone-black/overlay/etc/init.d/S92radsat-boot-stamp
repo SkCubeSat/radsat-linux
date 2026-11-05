@@ -1,0 +1,59 @@
+#!/bin/sh
+#
+# Stamp ground-visible FRAM boot_media / boot_image_id once the system is
+# usable. Runs late (after fram-service). Comms health is preferred but we
+# still stamp media so ground can see which image is running once the link
+# comes up.
+#
+
+case "$1" in
+	start)
+		;;
+	stop)
+		exit 0
+		;;
+	*)
+		echo "Usage: $0 {start|stop}" >&2
+		exit 1
+		;;
+esac
+
+[ -x /usr/sbin/fram-set ] || exit 0
+
+# Detect root media: 0=eMMC, 1=SD (sysfs type).
+MEDIA=0
+ROOT_SRC=$(awk '$2=="/"{print $1}' /proc/mounts | head -n1)
+case "$ROOT_SRC" in
+	/dev/mmcblk*)
+		BASE=${ROOT_SRC%%p*}
+		NAME=${BASE#/dev/}
+		TYP=$(cat /sys/block/"$NAME"/device/type 2>/dev/null) || TYP=""
+		if [ "$TYP" = "SD" ]; then
+			MEDIA=1
+		fi
+		;;
+esac
+
+/usr/sbin/fram-set boot_media "$MEDIA" 2>/dev/null || true
+
+# Compact image id from /etc/radsat-image-id if present (u64 decimal).
+if [ -f /etc/radsat-image-id ]; then
+	ID=$(awk 'NF{print $1; exit}' /etc/radsat-image-id)
+	case "$ID" in
+		''|*[!0-9]*) ;;
+		*) /usr/sbin/fram-set boot_image_id "$ID" 2>/dev/null || true ;;
+	esac
+fi
+
+# If FRAM recovery latch is still set but we booted from SD, kick auto-recover.
+if [ "$MEDIA" = "1" ] && [ -x /usr/sbin/fram-get ] && [ -x /usr/sbin/install-os ]; then
+	NEED=$(/usr/sbin/fram-get emmc_recovery_needed 2>/dev/null | awk -F': ' '/boolValue:/{print $2; exit}')
+	case "$NEED" in
+		true|True|1)
+			echo "radsat-boot-stamp: FRAM recovery latch set; running install-os auto-recover"
+			/usr/sbin/install-os auto-recover -y
+			;;
+	esac
+fi
+
+exit 0

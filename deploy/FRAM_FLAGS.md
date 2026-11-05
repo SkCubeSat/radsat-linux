@@ -1,69 +1,75 @@
-# RadSat FRAM mission flags (layout v2)
+# RadSat FRAM mission flags (layout v4)
 
 All of these **belong in FRAM** (dual-slot, power-cycle durable).  
 Put **bulk commissioning logs / dumps in MRAM** (`mram put …`), not FRAM.
 
-U-Boot only overlays boot-policy keys **1–6**. Consent / faults / counters are **FRAM-only** (never `bootcmd`).
+U-Boot overlays boot-policy keys **1–6** into env.  
+U-Boot **reads/writes** recovery keys **8–14** (never as `bootcmd`).  
+Consent / faults / counters / AES are **FRAM-only** (never `bootcmd`).
 
-## Already present (v1)
+Layout v4 **repacks** key IDs vs v2/v3 (recovery sits after boot policy).  
+Prior chips are not binary-compatible — blank/reconcile or wipe + re-init.
+
+`RESERVED_KEYS=40`. `LAYOUT_VERSION=4`.
+
+## Boot policy (ids 1–7)
 
 | id | name | type | notes |
 |----|------|------|-------|
-| 1 | `remove_before_flight` | bool | boot |
+| 1 | `remove_before_flight` | bool | boot / U-Boot overlay |
 | 2 | `deployed` | bool | boot |
 | 3 | `deploy_start` | timestamp | boot |
 | 4 | `initial_safe_state_complete` | bool | boot |
 | 5 | `fsoo_timer` | u64 | **30‑minute timer** |
 | 6 | `detumbling_complete` | bool | boot |
-| 7 | `boot_checksum` | u64 | CRC trailer |
-| 8 | `solar_panel_deployed` | bool | one-time |
-| 9 | `uhf_antenna_deployed` | bool | one-time |
-| 10 | `vhf_antenna_deployed` | bool | one-time |
+| 7 | `boot_checksum` | u64 | CRC trailer over keys 1–6 raw dual-slots |
 
-## Added in v2
+## Recovery + ground-visible boot state (ids 8–14)
 
-### One-time / completion
+| id | name | type | notes |
+|----|------|------|-------|
+| 8 | `total_boot_fails` | u64 | lifetime; increment on eMMC probe/boot failure; **never clear** on healthy boot |
+| 9 | `emmc_recovery_needed` | bool | latch: force SD boot / restore until verified |
+| 10 | `emmc_recovery_attempts` | u64 | restore attempt counter |
+| 11 | `sd_restore_slot` | u64 | which SD image slot to restore from |
+| 12 | `last_emmc_probe_ok` | bool | last U-Boot eMMC FAT/kernel probe |
+| 13 | `boot_media` | u64 | 0=eMMC, 1=SD primary, 2+=SD backup slot |
+| 14 | `boot_image_id` | u64 | compact image identity (stamped when usable) |
+
+## Mission / consent / faults / counters / AES (ids 15–39)
+
 | id | name | type |
 |----|------|------|
-| 11 | `adcs_commissioning_logged` | bool | ADCS commissioning log captured (blob → MRAM) |
-
-### Ground consent
-| id | name | type | gates |
-|----|------|------|-------|
-| 12 | `adcs_commissioned` | bool | operator → may detumble |
-| 13 | `sun_pointing_consent` | bool | |
-| 14 | `nadir_pointing_consent` | bool | |
-| 15 | `platform_commissioned` | bool | → payload check allowed |
-
-### Failure trips
-| id | name |
-|----|------|
-| 16 | `gnss_system_error` |
-| 17–18 | `gyro0_fail`, `gyro1_fail` |
-| 19–20 | `mag0_fail`, `mag1_fail` |
-| 21 | `reaction_wheel_fail` |
-| 22 | `sun_sensor_fail` |
-| 23 | `earth_sensor_fail` |
-| 24–25 | `sun_pointing_angle_fault`, `sun_pointing_rate_fault` |
-| 26–27 | `nadir_pointing_angle_fault`, `nadir_pointing_rate_fault` |
-
-### Attempt counters (u64)
-| id | name |
-|----|------|
-| 28 | `antenna_deploy_attempts` |
-| 29 | `solar_panel_deploy_attempts` |
-| 30 | `nadir_point_attempts` |
-| 31 | `sun_point_attempts` |
-
-`RESERVED_KEYS=32` → one spare slot.
+| 15 | `solar_panel_deployed` | bool |
+| 16 | `uhf_antenna_deployed` | bool |
+| 17 | `vhf_antenna_deployed` | bool |
+| 18 | `adcs_commissioning_logged` | bool |
+| 19 | `adcs_commissioned` | bool |
+| 20 | `sun_pointing_consent` | bool |
+| 21 | `nadir_pointing_consent` | bool |
+| 22 | `platform_commissioned` | bool |
+| 23 | `gnss_system_error` | bool |
+| 24–25 | `gyro0_fail`, `gyro1_fail` | bool |
+| 26–27 | `mag0_fail`, `mag1_fail` | bool |
+| 28 | `reaction_wheel_fail` | bool |
+| 29 | `sun_sensor_fail` | bool |
+| 30 | `earth_sensor_fail` | bool |
+| 31–32 | `sun_pointing_angle_fault`, `sun_pointing_rate_fault` | bool |
+| 33–34 | `nadir_pointing_angle_fault`, `nadir_pointing_rate_fault` | bool |
+| 35 | `antenna_deploy_attempts` | u64 |
+| 36 | `solar_panel_deploy_attempts` | u64 |
+| 37 | `nadir_point_attempts` | u64 |
+| 38 | `sun_point_attempts` | u64 |
+| 39 | `comms_uplink_aes128_key` | bytes | write-once AES-128; never U-Boot-mirrored |
 
 ## CLI
 
 ```sh
 fram-get
-fram-get adcs_commissioned
+fram-get total_boot_fails
+fram-get boot_media
+fram-set emmc_recovery_needed true
 fram-set adcs_commissioned true
-fram-set antenna_deploy_attempts 3
 # commissioning log body:
 mram put adcs_commissioning.log /tmp/log.txt text/plain
 fram-set adcs_commissioning_logged true

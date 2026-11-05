@@ -79,6 +79,19 @@ sync_one common/patches/uboot/0008-bbb-mram-env-failopen.patch
 sync_one common/patches/uboot/0009-bbb-fram-i2c2-clock-restore.patch
 sync_one common/patches/uboot/0010-bbb-emmc-default-sd-fallback.patch
 sync_one common/patches/uboot/0011-bbb-usb-optional-no-musb.patch
+sync_one common/patches/uboot/0012-bbb-spl-emmc-init-retry.patch
+sync_one common/patches/uboot/0013-bbb-emmc-only-boot.patch
+sync_one common/patches/uboot/0014-bbb-mram-env-spi-chunked-enable.patch
+sync_one common/patches/uboot/0015-bbb-spi1-pindir-d0-in-d1-out.patch
+sync_one common/patches/uboot/0016-bbb-mram-env-import-polarity.patch
+sync_one common/patches/uboot/0017-bbb-fram-recovery-boot.patch
+sync_one common/patches/linux/0006-arm-omap-am33xx-watchdog-restart.patch
+sync_one common/patches/linux/0007-i2c-omap-force-restart.patch
+sync_one common/patches/linux/0008-watchdog-quiet-restart-nowayout.patch
+sync_one board/kubos/beaglebone-black/overlay/etc/init.d/S92radsat-boot-stamp
+sync_one board/kubos/beaglebone-black/overlay/etc/radsat-image-id
+sync_one deploy/FRAM_FLAGS.md
+sync_one deploy/kpack-phases/PHASES.txt
 
 chmod +x "$DST/board/kubos/beaglebone-black/overlay/sbin/monit-respawn"
 chmod +x "$DST/board/kubos/beaglebone-black/overlay/sbin/ensure-system-log"
@@ -93,6 +106,7 @@ chmod +x "$DST/board/kubos/beaglebone-black/overlay/usr/sbin/mram"
 chmod +x "$DST/board/kubos/beaglebone-black/overlay/usr/sbin/disable-usb-eth-ssh"
 chmod +x "$DST/board/kubos/beaglebone-black/overlay/usr/sbin/verify-mram-fram-boot"
 chmod +x "$DST/board/kubos/beaglebone-black/overlay/etc/init.d/S79mram-env-sync"
+chmod +x "$DST/board/kubos/beaglebone-black/overlay/etc/init.d/S92radsat-boot-stamp"
 chmod +x "$DST/board/kubos/beaglebone-black/overlay/etc/init.d/S50dropbear"
 chmod +x "$DST/board/kubos/beaglebone-black/post-image.sh"
 chmod +x "$DST/tools/kubos-package.sh" 2>/dev/null || true
@@ -152,6 +166,10 @@ install -D -m 0755 "$DST/package/kubos/kubos-mram/kubos-mram" \
   "$OUT/target/etc/init.d/S91kubos-mram"
 install -D -m 0755 "$DST/board/kubos/beaglebone-black/overlay/etc/init.d/S79mram-env-sync" \
   "$OUT/target/etc/init.d/S79mram-env-sync"
+install -D -m 0755 "$DST/board/kubos/beaglebone-black/overlay/etc/init.d/S92radsat-boot-stamp" \
+  "$OUT/target/etc/init.d/S92radsat-boot-stamp"
+install -D -m 0644 "$DST/board/kubos/beaglebone-black/overlay/etc/radsat-image-id" \
+  "$OUT/target/etc/radsat-image-id"
 install -D -m 0755 "$DST/board/kubos/beaglebone-black/overlay/usr/sbin/fram-get" \
   "$OUT/target/usr/sbin/fram-get"
 install -D -m 0755 "$DST/board/kubos/beaglebone-black/overlay/usr/sbin/fram-set" \

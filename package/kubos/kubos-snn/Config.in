@@ -58,6 +58,56 @@ config BR2_KUBOS_SNN_UART_BUS
     help
         Linux UART connected to the SNN payload board. Wiring is TBD.
 
+config BR2_KUBOS_SNN_UART_BAUD
+    int "UART Baud"
+    default 115200
+    depends on BR2_PACKAGE_KUBOS_SNN
+
+config BR2_KUBOS_SNN_READ_LINE_TIMEOUT_MS
+    int "Read Line Timeout (ms)"
+    default 2000
+    depends on BR2_PACKAGE_KUBOS_SNN
+
+config BR2_KUBOS_SNN_READY_TIMEOUT_MS
+    int "Ready Timeout (ms)"
+    default 2000
+    depends on BR2_PACKAGE_KUBOS_SNN
+
+config BR2_KUBOS_SNN_RX_OK_TIMEOUT_MS
+    int "RX OK Timeout (ms)"
+    default 5000
+    depends on BR2_PACKAGE_KUBOS_SNN
+
+config BR2_KUBOS_SNN_PROCESSING_TIMEOUT_MS
+    int "Processing Timeout (ms)"
+    default 60000
+    depends on BR2_PACKAGE_KUBOS_SNN
+
+config BR2_KUBOS_SNN_RESULT_INFO_TIMEOUT_MS
+    int "Result Info Timeout (ms)"
+    default 2000
+    depends on BR2_PACKAGE_KUBOS_SNN
+
+config BR2_KUBOS_SNN_RESULT_HEADER_TIMEOUT_MS
+    int "Result Header Timeout (ms)"
+    default 2000
+    depends on BR2_PACKAGE_KUBOS_SNN
+
+config BR2_KUBOS_SNN_QUEUE_CAPACITY
+    int "Queue Capacity"
+    default 4
+    depends on BR2_PACKAGE_KUBOS_SNN
+
+config BR2_KUBOS_SNN_RESULT_RETENTION
+    int "Result Retention"
+    default 4
+    depends on BR2_PACKAGE_KUBOS_SNN
+
+config BR2_KUBOS_SNN_MAX_IMAGE_BYTES
+    int "Max Image Bytes"
+    default 4194304
+    depends on BR2_PACKAGE_KUBOS_SNN
+
 endif
 
 config BR2_PACKAGE_HAS_KUBOS_SNN

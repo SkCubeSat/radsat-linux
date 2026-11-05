@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Wed, 4 Nov 2026 19:40:00 -0600
+Subject: [PATCH] watchdog: quiet nowayout warn during SYSTEM_RESTART
+
+Userspace intentionally arms omap_wdt without magic-close before reboot
+so a hung flush still resets the SoC. The core "watchdog did not stop!"
+warning looks like a failure; skip it when we are already restarting.
+
+---
+diff --git a/drivers/watchdog/watchdog_dev.c b/drivers/watchdog/watchdog_dev.c
+--- a/drivers/watchdog/watchdog_dev.c
++++ b/drivers/watchdog/watchdog_dev.c
+@@ -20,6 +20,7 @@
+ #include <linux/errno.h>	/* error codes */
+ #include <linux/fs.h>		/* everything... */
+ #include <linux/kernel.h>	/* printk() */
++#include <linux/reboot.h>	/* system_state */
+ #include <linux/kmod.h>		/* request_module() */
+ #include <linux/kthread.h>	/* kthread_run / wake_up_process */
+ #include <linux/miscdevice.h>	/* misc_register and friends */
+@@ -355,8 +356,10 @@ static int watchdog_release(struct inode *inode, struct file *file)
+ 	 * make sure that a machine reboot happens.
+ 	 */
+ 	if (test_bit(WDOG_ACTIVE, &wdd->status)) {
+-		pr_crit("watchdog%d: watchdog did not stop!\n", wdd->id);
++		if (system_state != SYSTEM_RESTART)
++			pr_crit("watchdog%d: watchdog did not stop!\n", wdd->id);
+ 		watchdog_ping(wdd);
+ 	}
+ 
+ 	/* make sure that /dev/watchdog can be re-opened */

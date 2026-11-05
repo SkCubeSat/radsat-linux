@@ -138,6 +138,5 @@ index abcd123..abcd124 100644
 -	/* TODO: Handle mode and cmd if necessary */
 -
 +	am33xx_arm_wdt();
-+	pr_emerg("am33xx: warm reset\n");
  	omap_prm_reset_system();
  }

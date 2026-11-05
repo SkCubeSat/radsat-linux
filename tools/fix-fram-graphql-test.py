@@ -29,7 +29,7 @@ old_assert = """    assert_eq!(map["capacityBytes"], 8192);
 """
 new_assert = """    assert_eq!(map["capacityBytes"], 8192);
     assert_eq!(map["layoutMagic"], 0x4D_41_52_46i64);
-    assert_eq!(map["layoutVersion"], 1);
+    assert_eq!(map["layoutVersion"], 4);
     assert_eq!(map["missionRegionStart"], 0);
 """
 if old_assert not in t:
@@ -37,3 +37,4 @@ if old_assert not in t:
 t = t.replace(old_assert, new_assert, 1)
 p.write_text(t)
 print("fram graphql test updated")
+

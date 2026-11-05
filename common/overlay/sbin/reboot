@@ -21,8 +21,6 @@ if [ "$euid" != "0" ]; then
     exit 1
 fi
 
-echo "reboot: forcing reset" > /dev/console 2>/dev/null
-
 if [ -x /sbin/flush-filesystems ]; then
     /sbin/flush-filesystems
 else

@@ -1,0 +1,318 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Wed, 4 Nov 2026 20:15:00 -0600
+Subject: [PATCH] arm: bbb: FRAM layout v4 + automatic SD->eMMC recovery
+
+Bump FRAM_LAYOUT_VERSION to 4. Add recovery key R/W (ids 8-14). On
+eMMC FAT/kernel probe failure, increment total_boot_fails, latch
+emmc_recovery_needed, and prefer SD boot. While recovery is latched,
+attempt a chunked SD->eMMC image copy; clear the latch only after a
+successful eMMC probe so power loss mid-copy still boots SD.
+
+---
+--- a/common/fram_mission.c
++++ b/common/fram_mission.c
+@@ -24,9 +24,9 @@
+ #define FRAM_BOOT_POLICY_KEYS	6
+ #define FRAM_BOOT_DATA_END	(FRAM_BOOT_POLICY_KEYS * FRAM_SLOTS_PER_KEY * FRAM_RECORD_SIZE)
+ #define FRAM_LAYOUT_MAGIC	0x4D415246u	/* "FRAM" LE */
+-#define FRAM_LAYOUT_VERSION	2
++#define FRAM_LAYOUT_VERSION	4
+ #define FRAM_LAYOUT_VERSION_MIN	1
+-#define FRAM_LAYOUT_OFFSET	2048
++#define FRAM_LAYOUT_OFFSET	2560	/* RESERVED_KEYS=40 * 2 * 32 */
+ #define FRAM_REC_MAGIC		0x4652
+ 
+ struct fram_key {
+@@ -43,6 +43,19 @@
+ 	{ 5, "fsoo_timer", 3 },
+ 	{ 6, "detumbling_complete", 1 },
+ };
++
++/* Recovery keys: U-Boot R/W; never setenv into classic bootcmd. */
++#define FRAM_KEY_TOTAL_BOOT_FAILS	8
++#define FRAM_KEY_EMMC_RECOVERY_NEEDED	9
++#define FRAM_KEY_EMMC_RECOVERY_ATTEMPTS	10
++#define FRAM_KEY_SD_RESTORE_SLOT	11
++#define FRAM_KEY_LAST_EMMC_PROBE_OK	12
++#define FRAM_KEY_BOOT_MEDIA		13
++#define FRAM_KEY_BOOT_IMAGE_ID		14
++#define FRAM_RECOVERY_ATTEMPT_CAP	5
++
++int radsat_fram_recovery_needed(void);
++int radsat_fram_run_recovery(void);
+ 
+ static u32 crc32_fram(const u8 *data, u32 len)
+ {
+@@ -293,3 +306,233 @@
+ out:
+ 	i2c_set_bus_num(old_bus);
+ }
++
++
++static int fram_encode_bool(u8 id, int value, u32 seq, u8 *out)
++{
++	memset(out, 0, FRAM_RECORD_SIZE);
++	out[0] = (u8)FRAM_REC_MAGIC;
++	out[1] = (u8)(FRAM_REC_MAGIC >> 8);
++	out[2] = 1;
++	out[3] = id;
++	out[4] = 1;
++	out[5] = 1;
++	out[6] = (u8)seq;
++	out[7] = (u8)(seq >> 8);
++	out[8] = (u8)(seq >> 16);
++	out[9] = (u8)(seq >> 24);
++	out[10] = value ? 1 : 0;
++	{
++		u32 c = crc32_fram(out, 28);
++		out[28] = (u8)c;
++		out[29] = (u8)(c >> 8);
++		out[30] = (u8)(c >> 16);
++		out[31] = (u8)(c >> 24);
++	}
++	return 0;
++}
++
++static int fram_encode_u64(u8 id, u64 value, u32 seq, u8 *out)
++{
++	int i;
++	memset(out, 0, FRAM_RECORD_SIZE);
++	out[0] = (u8)FRAM_REC_MAGIC;
++	out[1] = (u8)(FRAM_REC_MAGIC >> 8);
++	out[2] = 1;
++	out[3] = id;
++	out[4] = 3;
++	out[5] = 8;
++	out[6] = (u8)seq;
++	out[7] = (u8)(seq >> 8);
++	out[8] = (u8)(seq >> 16);
++	out[9] = (u8)(seq >> 24);
++	for (i = 0; i < 8; i++)
++		out[10 + i] = (u8)(value >> (8 * i));
++	{
++		u32 c = crc32_fram(out, 28);
++		out[28] = (u8)c;
++		out[29] = (u8)(c >> 8);
++		out[30] = (u8)(c >> 16);
++		out[31] = (u8)(c >> 24);
++	}
++	return 0;
++}
++
++static int fram_write_key_slots(u8 id, u8 *rec)
++{
++	u16 off_a = (id - 1) * FRAM_SLOTS_PER_KEY * FRAM_RECORD_SIZE;
++	u16 off_b = off_a + FRAM_RECORD_SIZE;
++
++	if (fram_write(off_b, rec, FRAM_RECORD_SIZE))
++		return -1;
++	if (fram_write(off_a, rec, FRAM_RECORD_SIZE))
++		return -1;
++	return 0;
++}
++
++static int fram_read_u64(u8 id, u64 *out)
++{
++	u8 raw[FRAM_RECORD_SIZE];
++	u16 off = (id - 1) * FRAM_SLOTS_PER_KEY * FRAM_RECORD_SIZE;
++	u16 magic;
++	int i;
++
++	if (fram_read(off, raw, sizeof(raw)))
++		return -1;
++	magic = raw[0] | (raw[1] << 8);
++	if (magic != FRAM_REC_MAGIC || raw[3] != id || raw[4] != 3 || raw[5] != 8)
++		return -1;
++	if (crc32_fram(raw, 28) !=
++	    (u32)(raw[28] | (raw[29] << 8) | (raw[30] << 16) | (raw[31] << 24)))
++		return -1;
++	*out = 0;
++	for (i = 0; i < 8; i++)
++		*out |= ((u64)raw[10 + i]) << (8 * i);
++	return 0;
++}
++
++static int fram_read_bool(u8 id, int *out)
++{
++	u8 raw[FRAM_RECORD_SIZE];
++	u16 off = (id - 1) * FRAM_SLOTS_PER_KEY * FRAM_RECORD_SIZE;
++	u16 magic;
++
++	if (fram_read(off, raw, sizeof(raw)))
++		return -1;
++	magic = raw[0] | (raw[1] << 8);
++	if (magic != FRAM_REC_MAGIC || raw[3] != id || raw[4] != 1 || raw[5] != 1)
++		return -1;
++	if (crc32_fram(raw, 28) !=
++	    (u32)(raw[28] | (raw[29] << 8) | (raw[30] << 16) | (raw[31] << 24)))
++		return -1;
++	*out = raw[10] ? 1 : 0;
++	return 0;
++}
++
++static int fram_set_bool(u8 id, int value)
++{
++	u8 rec[FRAM_RECORD_SIZE];
++	fram_encode_bool(id, value, 1, rec);
++	return fram_write_key_slots(id, rec);
++}
++
++static int fram_set_u64(u8 id, u64 value)
++{
++	u8 rec[FRAM_RECORD_SIZE];
++	fram_encode_u64(id, value, 1, rec);
++	return fram_write_key_slots(id, rec);
++}
++
++static int fram_bump_u64(u8 id)
++{
++	u64 v = 0;
++
++	fram_read_u64(id, &v);
++	v++;
++	return fram_set_u64(id, v);
++}
++
++static int radsat_emmc_probe(void)
++{
++	run_command("mmc dev 1", 0);
++	if (run_command("mmc rescan", 0))
++		return -1;
++	if (!run_command("fatload mmc 1:1 ${loadaddr} /kernel", 0))
++		return 0;
++	if (!run_command("fatload mmc 1:1 ${loadaddr} /uImage", 0))
++		return 0;
++	return -1;
++}
++
++int radsat_fram_recovery_needed(void)
++{
++	unsigned int old_bus = i2c_get_bus_num();
++	int needed = 0;
++	int probe_ok;
++
++	if (i2c_set_bus_num(CONFIG_FRAM_I2C_BUS))
++		return 0;
++
++	fram_ensure_layout_header();
++
++	probe_ok = (radsat_emmc_probe() == 0);
++	fram_set_bool(FRAM_KEY_LAST_EMMC_PROBE_OK, probe_ok ? 1 : 0);
++
++	if (!probe_ok) {
++		puts("FRAM: eMMC probe failed; latching recovery\n");
++		fram_bump_u64(FRAM_KEY_TOTAL_BOOT_FAILS);
++		fram_set_bool(FRAM_KEY_EMMC_RECOVERY_NEEDED, 1);
++		needed = 1;
++	} else {
++		int latch = 0;
++		if (!fram_read_bool(FRAM_KEY_EMMC_RECOVERY_NEEDED, &latch) && latch)
++			needed = 1;
++	}
++
++	i2c_set_bus_num(old_bus);
++	return needed;
++}
++
++int radsat_fram_run_recovery(void)
++{
++	unsigned int old_bus = i2c_get_bus_num();
++	u64 attempts = 0;
++	char cmd[128];
++	unsigned long blk, span = 0x180000;
++	unsigned long chunk = 0x800;
++	int fail = 0;
++
++	if (i2c_set_bus_num(CONFIG_FRAM_I2C_BUS))
++		return -1;
++
++	fram_read_u64(FRAM_KEY_EMMC_RECOVERY_ATTEMPTS, &attempts);
++	if (attempts >= FRAM_RECOVERY_ATTEMPT_CAP) {
++		puts("FRAM: recovery attempt cap reached; staying on SD\n");
++		i2c_set_bus_num(old_bus);
++		return -1;
++	}
++	attempts++;
++	fram_set_u64(FRAM_KEY_EMMC_RECOVERY_ATTEMPTS, attempts);
++	fram_set_bool(FRAM_KEY_EMMC_RECOVERY_NEEDED, 1);
++	i2c_set_bus_num(old_bus);
++
++	puts("FRAM: attempting U-Boot chunked SD->eMMC restore\n");
++	run_command("mmc rescan", 0);
++	for (blk = 0; blk < span && !fail; blk += chunk) {
++		unsigned long n = chunk;
++		if (blk + n > span)
++			n = span - blk;
++		snprintf(cmd, sizeof(cmd),
++			 "mmc dev 0 && mmc read ${loadaddr} 0x%lx 0x%lx",
++			 blk, n);
++		if (run_command(cmd, 0)) {
++			fail = 1;
++			break;
++		}
++		snprintf(cmd, sizeof(cmd),
++			 "mmc dev 1 && mmc write ${loadaddr} 0x%lx 0x%lx",
++			 blk, n);
++		if (run_command(cmd, 0)) {
++			fail = 1;
++			break;
++		}
++	}
++	if (fail) {
++		puts("FRAM: U-Boot raw restore failed; boot SD for install-os\n");
++		return -1;
++	}
++
++	if (radsat_emmc_probe() != 0) {
++		puts("FRAM: eMMC still bad after copy; boot SD for install-os\n");
++		return -1;
++	}
++
++	if (i2c_set_bus_num(CONFIG_FRAM_I2C_BUS) == 0) {
++		fram_set_bool(FRAM_KEY_EMMC_RECOVERY_NEEDED, 0);
++		fram_set_bool(FRAM_KEY_LAST_EMMC_PROBE_OK, 1);
++		fram_set_u64(FRAM_KEY_BOOT_MEDIA, 0);
++		i2c_set_bus_num(old_bus);
++	}
++	puts("FRAM: eMMC restore verified; clearing recovery latch\n");
++	return 0;
++}
+--- a/board/ti/am335x/board.c
++++ b/board/ti/am335x/board.c
+@@ -1,4 +1,6 @@
+ void radsat_fram_overlay_env(void);
++int radsat_fram_recovery_needed(void);
++int radsat_fram_run_recovery(void);
+ /*
+  * board.c
+  *
+@@ -575,6 +577,14 @@
+ {
+ #ifdef CONFIG_RADSAT_FRAM_POLICY
+ 	radsat_fram_overlay_env();
++	if (radsat_fram_recovery_needed()) {
++		if (radsat_fram_run_recovery() != 0) {
++			/* Fall through to SD Linux; install-os finishes restore. */
++			setenv("mmcdev", "0");
++			setenv("bootpart", "0:2");
++			setenv("boot_targets", "legacy_mmc0");
++		}
++	}
+ #endif
+ #ifdef CONFIG_ENV_VARS_UBOOT_RUNTIME_CONFIG
+ 	int rc;
+--- a/include/configs/beaglebone-black.h
++++ b/include/configs/beaglebone-black.h
+@@ -95,9 +95,10 @@
+ #define CONFIG_BOOTCOMMAND \
+     "run distro_bootcmd"
+ 
+-/* Flight: eMMC only (no SD boot target). */
++/* Flight: eMMC default. SD remains available for FRAM-latched recovery. */
+ #define BOOT_TARGET_DEVICES(func) \
+     func(LEGACY_MMC, legacy_mmc, 1) \
++    func(LEGACY_MMC, legacy_mmc, 0) \
+ 
+ #ifndef CONFIG_SPL_BUILD
+ #define CONFIG_EXTRA_ENV_SETTINGS \
