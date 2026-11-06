@@ -1,16 +1,17 @@
-# RadSat FRAM mission flags (layout v4)
+# RadSat FRAM mission flags (layout v5)
 
 All of these **belong in FRAM** (dual-slot, power-cycle durable).  
 Put **bulk commissioning logs / dumps in MRAM** (`mram put …`), not FRAM.
 
 U-Boot overlays boot-policy keys **1–6** into env.  
-U-Boot **reads/writes** recovery keys **8–14** (never as `bootcmd`).  
+U-Boot **reads/writes** recovery keys **8–14** and **40** (never as `bootcmd`).  
 Consent / faults / counters / AES are **FRAM-only** (never `bootcmd`).
 
 Layout v4 **repacks** key IDs vs v2/v3 (recovery sits after boot policy).  
+Layout v5 adds `emmc_restore_offset` (id 40) for resumable SD→eMMC restore.  
 Prior chips are not binary-compatible — blank/reconcile or wipe + re-init.
 
-`RESERVED_KEYS=40`. `LAYOUT_VERSION=4`.
+`RESERVED_KEYS=41`. `LAYOUT_VERSION=5`.
 
 ## Boot policy (ids 1–7)
 
@@ -24,17 +25,18 @@ Prior chips are not binary-compatible — blank/reconcile or wipe + re-init.
 | 6 | `detumbling_complete` | bool | boot |
 | 7 | `boot_checksum` | u64 | CRC trailer over keys 1–6 raw dual-slots |
 
-## Recovery + ground-visible boot state (ids 8–14)
+## Recovery + ground-visible boot state (ids 8–14, 40)
 
 | id | name | type | notes |
 |----|------|------|-------|
 | 8 | `total_boot_fails` | u64 | lifetime; increment on eMMC probe/boot failure; **never clear** on healthy boot |
 | 9 | `emmc_recovery_needed` | bool | latch: force SD boot / restore until verified |
-| 10 | `emmc_recovery_attempts` | u64 | restore attempt counter |
+| 10 | `emmc_recovery_attempts` | u64 | restore attempt counter (bumped only when offset==0) |
 | 11 | `sd_restore_slot` | u64 | which SD image slot to restore from |
 | 12 | `last_emmc_probe_ok` | bool | last U-Boot eMMC FAT/kernel probe |
 | 13 | `boot_media` | u64 | 0=eMMC, 1=SD primary, 2+=SD backup slot |
 | 14 | `boot_image_id` | u64 | compact image identity (stamped when usable) |
+| 40 | `emmc_restore_offset` | u64 | SD→eMMC copy resume sector; **0** = start/cleared |
 
 ## Mission / consent / faults / counters / AES (ids 15–39)
 
@@ -68,7 +70,9 @@ Prior chips are not binary-compatible — blank/reconcile or wipe + re-init.
 fram-get
 fram-get total_boot_fails
 fram-get boot_media
+fram-get emmc_restore_offset
 fram-set emmc_recovery_needed true
+fram-set emmc_restore_offset 0
 fram-set adcs_commissioned true
 # commissioning log body:
 mram put adcs_commissioning.log /tmp/log.txt text/plain

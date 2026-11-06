@@ -1,0 +1,147 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Thu, 5 Nov 2026 20:00:00 -0600
+Subject: [PATCH] arm: bbb: FRAM v5 + resumable SD->eMMC restore
+
+Bump FRAM_LAYOUT_VERSION to 5 and RESERVED layout offset for
+RESERVED_KEYS=41. Add emmc_restore_offset (key 40). Resume chunked
+SD->eMMC copy from the saved sector; checkpoint after each chunk.
+Use a hardcoded load address when ${loadaddr} is unset so probe and
+restore do not print fatload/mmc usage. Bump recovery attempts only
+when starting from offset 0.
+
+---
+--- a/common/fram_mission.c
++++ b/common/fram_mission.c
+@@ -24,9 +24,10 @@
+ #define FRAM_BOOT_POLICY_KEYS	6
+ #define FRAM_BOOT_DATA_END	(FRAM_BOOT_POLICY_KEYS * FRAM_SLOTS_PER_KEY * FRAM_RECORD_SIZE)
+ #define FRAM_LAYOUT_MAGIC	0x4D415246u	/* "FRAM" LE */
+-#define FRAM_LAYOUT_VERSION	4
++#define FRAM_LAYOUT_VERSION	5
+ #define FRAM_LAYOUT_VERSION_MIN	1
+-#define FRAM_LAYOUT_OFFSET	2560	/* RESERVED_KEYS=40 * 2 * 32 */
++#define FRAM_LAYOUT_OFFSET	2624	/* RESERVED_KEYS=41 * 2 * 32 */
+ #define FRAM_REC_MAGIC		0x4652
+ 
+ struct fram_key {
+@@ -40,6 +41,7 @@
+ #define FRAM_KEY_LAST_EMMC_PROBE_OK	12
+ #define FRAM_KEY_BOOT_MEDIA		13
+ #define FRAM_KEY_BOOT_IMAGE_ID		14
++#define FRAM_KEY_EMMC_RESTORE_OFFSET	40
+ #define FRAM_RECOVERY_ATTEMPT_CAP	5
+ 
+ int radsat_fram_recovery_needed(void);
+@@ -177,12 +179,14 @@
+ 
+ static int radsat_emmc_probe(void)
+ {
++	/* Prefer env loadaddr; fall back so empty env cannot fake a probe fail. */
++	const char *load =
++		(getenv("loadaddr") && getenv("loadaddr")[0]) ? "${loadaddr}" : "0x82000000";
++	char cmd[96];
++
+ 	run_command("mmc dev 1", 0);
+ 	if (run_command("mmc rescan", 0))
+ 		return -1;
+-	if (!run_command("fatload mmc 1:1 ${loadaddr} /kernel", 0))
+-		return 0;
+-	if (!run_command("fatload mmc 1:1 ${loadaddr} /uImage", 0))
++	snprintf(cmd, sizeof(cmd), "fatload mmc 1:1 %s /kernel", load);
++	if (!run_command(cmd, 0))
+ 		return 0;
++	snprintf(cmd, sizeof(cmd), "fatload mmc 1:1 %s /uImage", load);
++	if (!run_command(cmd, 0))
++		return 0;
+ 	return -1;
+ }
+ 
+@@ -218,46 +222,75 @@
+ int radsat_fram_run_recovery(void)
+ {
+ 	unsigned int old_bus = i2c_get_bus_num();
+ 	u64 attempts = 0;
++	u64 offset = 0;
+ 	char cmd[128];
+ 	unsigned long blk, span = 0x180000;
+ 	unsigned long chunk = 0x800;
+ 	int fail = 0;
++	const char *load =
++		(getenv("loadaddr") && getenv("loadaddr")[0]) ? "${loadaddr}" : "0x82000000";
+ 
+ 	if (i2c_set_bus_num(CONFIG_FRAM_I2C_BUS))
+ 		return -1;
+ 
++	fram_read_u64(FRAM_KEY_EMMC_RESTORE_OFFSET, &offset);
++	if (offset >= span)
++		offset = 0;
++
+ 	fram_read_u64(FRAM_KEY_EMMC_RECOVERY_ATTEMPTS, &attempts);
+ 	if (attempts >= FRAM_RECOVERY_ATTEMPT_CAP) {
+ 		puts("FRAM: recovery attempt cap reached; staying on SD\n");
+ 		i2c_set_bus_num(old_bus);
+ 		return -1;
+ 	}
+-	attempts++;
+-	fram_set_u64(FRAM_KEY_EMMC_RECOVERY_ATTEMPTS, attempts);
++	/* Only count a new attempt when starting from sector 0 (not a resume). */
++	if (offset == 0) {
++		attempts++;
++		fram_set_u64(FRAM_KEY_EMMC_RECOVERY_ATTEMPTS, attempts);
++	}
+ 	fram_set_bool(FRAM_KEY_EMMC_RECOVERY_NEEDED, 1);
+ 	i2c_set_bus_num(old_bus);
+ 
+-	puts("FRAM: attempting U-Boot chunked SD->eMMC restore\n");
++	if (offset)
++		printf("FRAM: resuming SD->eMMC restore at sector 0x%llx\n",
++		       (unsigned long long)offset);
++	else
++		puts("FRAM: attempting U-Boot chunked SD->eMMC restore\n");
+ 	run_command("mmc rescan", 0);
+-	for (blk = 0; blk < span && !fail; blk += chunk) {
++	for (blk = (unsigned long)offset; blk < span && !fail; blk += chunk) {
+ 		unsigned long n = chunk;
+ 		if (blk + n > span)
+ 			n = span - blk;
+ 		snprintf(cmd, sizeof(cmd),
+-			 "mmc dev 0 && mmc read ${loadaddr} 0x%lx 0x%lx",
+-			 blk, n);
++			 "mmc dev 0 && mmc read %s 0x%lx 0x%lx",
++			 load, blk, n);
+ 		if (run_command(cmd, 0)) {
+ 			fail = 1;
+ 			break;
+ 		}
+ 		snprintf(cmd, sizeof(cmd),
+-			 "mmc dev 1 && mmc write ${loadaddr} 0x%lx 0x%lx",
+-			 blk, n);
++			 "mmc dev 1 && mmc write %s 0x%lx 0x%lx",
++			 load, blk, n);
+ 		if (run_command(cmd, 0)) {
+ 			fail = 1;
+ 			break;
+ 		}
++		/* Checkpoint after each successful chunk so power-cut can resume. */
++		if (i2c_set_bus_num(CONFIG_FRAM_I2C_BUS) == 0) {
++			fram_set_u64(FRAM_KEY_EMMC_RESTORE_OFFSET, (u64)(blk + n));
++			i2c_set_bus_num(old_bus);
++		}
+ 	}
+ 	if (fail) {
+ 		puts("FRAM: U-Boot raw restore failed; boot SD for install-os\n");
+ 		return -1;
+ 	}
+ 
+@@ -272,7 +305,9 @@
+ 	if (i2c_set_bus_num(CONFIG_FRAM_I2C_BUS) == 0) {
+ 		fram_set_bool(FRAM_KEY_EMMC_RECOVERY_NEEDED, 0);
+ 		fram_set_bool(FRAM_KEY_LAST_EMMC_PROBE_OK, 1);
+ 		fram_set_u64(FRAM_KEY_BOOT_MEDIA, 0);
++		fram_set_u64(FRAM_KEY_EMMC_RESTORE_OFFSET, 0);
+ 		i2c_set_bus_num(old_bus);
+ 	}
+ 	puts("FRAM: eMMC restore verified; clearing recovery latch\n");
+ 	return 0;
+ }

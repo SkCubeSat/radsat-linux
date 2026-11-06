@@ -40,13 +40,15 @@ echo
 echo "=== layout version gate ==="
 layout=$(fram-get 2>/dev/null | awk -F': ' '/layoutVersion:/{print $2; exit}')
 case "$layout" in
-	4|4,*)
+	5|5,*)
 		echo "OK: FRAM layoutVersion=$layout"
 		;;
 	*)
-		echo "WARN: expected layoutVersion 4, got '$layout'"
+		echo "WARN: expected layoutVersion 5, got '$layout'"
 		;;
 esac
+echo "=== restore resume offset ==="
+fram-get emmc_restore_offset 2>/dev/null || true
 
 echo "Anti-brick notes:"
 echo " 1) Corrupt FRAM (bad CRC) must still boot Linux; U-Boot warns and skips overlay."

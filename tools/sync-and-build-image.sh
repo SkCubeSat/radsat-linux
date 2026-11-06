@@ -85,6 +85,7 @@ sync_one common/patches/uboot/0014-bbb-mram-env-spi-chunked-enable.patch
 sync_one common/patches/uboot/0015-bbb-spi1-pindir-d0-in-d1-out.patch
 sync_one common/patches/uboot/0016-bbb-mram-env-import-polarity.patch
 sync_one common/patches/uboot/0017-bbb-fram-recovery-boot.patch
+sync_one common/patches/uboot/0018-bbb-fram-restore-resume.patch
 sync_one common/patches/linux/0006-arm-omap-am33xx-watchdog-restart.patch
 sync_one common/patches/linux/0007-i2c-omap-force-restart.patch
 sync_one common/patches/linux/0008-watchdog-quiet-restart-nowayout.patch

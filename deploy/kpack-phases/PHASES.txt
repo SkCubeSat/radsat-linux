@@ -1,0 +1,32 @@
+RadSat kpack phases (no full image flash)
+
+Build (WSL), with local Software override for FRAM layout v5:
+  export KUBOS_OVERRIDE_SRCDIR=/mnt/c/Users/logan/CubeSAT/Software
+  export FORCE_UBOOT=1 FORCE_KUBOS=1
+  bash tools/sync-and-build-image.sh
+  bash tools/package-kpack-phases.sh
+  # artifacts: deploy/kpack-phases/kpack-rootfs.itb + kpack-uboot.itb (+ .sha256)
+
+Phase 1 — rootfs kpack (fram-service v5, install-os resume, helpers)
+  - Apply kpack-rootfs.itb on the live board (already on eMMC new image).
+  - Reboot.
+  - Gates:
+      curl ... '{ memoryMap { layoutVersion } }'   # expect 5
+      fram-get emmc_restore_offset                 # expect intValue 0/absent ok
+      verify-mram-fram-boot
+
+Phase 2 — MRAM env (if not already seeded)
+  - mram-env-sync --seed --backend spidev --device /dev/spidev1.0 --out /envar/uboot.env
+  - Ensure bootcmd is NOT bootp/nfs (fw_printenv). Prefer explicit fatload bootcmd
+    until seed includes loadaddr/fdtaddr + distro scripts.
+
+Phase 3 — U-Boot kpack (0018 resume + loadaddr-safe probe)
+  - Only after Phase 1 PASS and bootcmd safe.
+  - Apply kpack-uboot.itb; reboot at 115200.
+  - Optional drill: fram-set emmc_recovery_needed true; start restore; power-cut;
+    next boot must log resume offset > 0 (U-Boot) or install-os "resuming at sector".
+
+Resume semantics
+  - FRAM key 40 emmc_restore_offset = next sector to copy (0 = start/cleared).
+  - U-Boot and install-os both checkpoint after each chunk.
+  - Success clears latch + offset. Power-cut keeps latch + offset.

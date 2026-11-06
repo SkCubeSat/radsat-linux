@@ -147,6 +147,9 @@ Only after SD image is known-good:
 1. Known-good SD primary (+ optional `install-os sd-backups`).
 2. `install-os sd-to-emmc -y` (power-loss-safe latch path) **from SD root**.
 3. Verify eMMC boot; then Phase 2 MRAM seed if needed; then U-Boot kpack.
+4. Resumable restore (layout v5 / `emmc_restore_offset`): ship via
+   `kpack-rootfs` then `kpack-uboot` — see `deploy/kpack-phases/PHASES.txt`.
+   Do **not** require a full image rewrite for resume support.
 
 Until then, ignore recovery dry-runs that assume eMMC is the flight medium.
 

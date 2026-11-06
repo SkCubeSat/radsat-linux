@@ -31,10 +31,11 @@
 #
 # Power-loss safety (sd-to-emmc / auto-recover):
 #   1) Latch FRAM emmc_recovery_needed=true BEFORE writing eMMC
-#   2) Copy SD -> eMMC
+#   2) Copy SD -> eMMC in chunks; after each chunk set emmc_restore_offset
 #   3) sync + verify eMMC has a bootable FAT kernel
-#   4) Only then clear emmc_recovery_needed and set boot_media=0
-# A cut mid-copy leaves the latch set so the next boot still prefers SD.
+#   4) Clear emmc_recovery_needed, emmc_restore_offset=0, boot_media=0
+# A cut mid-copy leaves the latch set and a non-zero offset so the next
+# boot resumes (U-Boot chunked restore or install-os auto-recover).
 #
 
 # NEVER use `set -e` with BusyBox ash on this image. Several common
@@ -428,13 +429,65 @@ fram_latch_recovery() {
     fi
 }
 
+fram_get_restore_offset() {
+    # Returns sector offset (0 if missing/unreadable). Prefer fram-get.
+    _off=0
+    if [ -x /usr/sbin/fram-get ]; then
+        _off=$(/usr/sbin/fram-get emmc_restore_offset 2>/dev/null | awk -F': ' '/intValue:/{print $2; exit}')
+    fi
+    case "$_off" in
+        ''|*[!0-9]*) _off=0 ;;
+    esac
+    echo "$_off"
+}
+
+fram_set_restore_offset() {
+    if [ -x /usr/sbin/fram-set ]; then
+        /usr/sbin/fram-set emmc_restore_offset "$1" 2>/dev/null || true
+    fi
+}
+
 fram_clear_recovery_after_verify() {
     if [ -x /usr/sbin/fram-set ]; then
         /usr/sbin/fram-set last_emmc_probe_ok true 2>/dev/null || true
         /usr/sbin/fram-set boot_media 0 2>/dev/null || true
+        /usr/sbin/fram-set emmc_restore_offset 0 2>/dev/null || true
         /usr/sbin/fram-set emmc_recovery_needed false 2>/dev/null || true
-        echo "OS Install: FRAM recovery latch cleared after eMMC verify"
+        echo "OS Install: FRAM recovery latch + restore offset cleared after eMMC verify"
     fi
+}
+
+# Chunked SD->eMMC with FRAM emmc_restore_offset checkpoints (8192 sectors = 4MiB).
+dd_span_resumable() {
+    _if=$1
+    _of=$2
+    _span=$3
+    _pos=$4
+    _chunk=8192
+
+    if [ "$_pos" -ge "$_span" ]; then
+        echo "OS Install: restore offset $_pos >= span $_span; restarting at 0"
+        _pos=0
+    fi
+    if [ "$_pos" -gt 0 ]; then
+        echo "OS Install: resuming at sector $_pos (span $_span)"
+    else
+        echo "OS Install: starting at sector 0 (span $_span)"
+        fram_set_restore_offset 0
+    fi
+
+    while [ "$_pos" -lt "$_span" ]; do
+        _n=$_chunk
+        _rem=$((_span - _pos))
+        if [ "$_n" -gt "$_rem" ]; then
+            _n=$_rem
+        fi
+        echo "OS Install: chunk sectors $_pos + $_n"
+        dd_span "$_if" "$_of" "$_n" "$_pos" "$_pos"
+        _pos=$((_pos + _n))
+        fram_set_restore_offset "$_pos"
+        sync
+    done
 }
 
 verify_emmc_bootable() {
@@ -482,12 +535,16 @@ do_sd_to_emmc() {
         exit 1
     fi
 
-    confirm "This will wipe eMMC ($EMMC) and copy ${SPAN} sectors (~$((SPAN / 2048)) MiB) from SD ($SD), then mkfs /home."
+    OFFSET=$(fram_get_restore_offset)
+    if [ "$OFFSET" -ge "$SPAN" ]; then
+        OFFSET=0
+    fi
+    confirm "This will wipe eMMC ($EMMC) and copy ${SPAN} sectors (~$((SPAN / 2048)) MiB) from SD ($SD) (resume offset=$OFFSET), then mkfs /home."
     # Latch BEFORE any eMMC write so a power cut mid-copy still boots SD.
     fram_latch_recovery
     stop_services
     umount_kubos "$EMMC" ""
-    dd_span "$SD" "$EMMC" "$SPAN" 0 0
+    dd_span_resumable "$SD" "$EMMC" "$SPAN" "$OFFSET"
     sync
     set_disk_signature_emmc "$EMMC"
     sync

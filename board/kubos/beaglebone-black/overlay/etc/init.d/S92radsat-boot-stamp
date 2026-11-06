@@ -22,7 +22,7 @@ esac
 
 # Detect root media: 0=eMMC, 1=SD (sysfs type).
 MEDIA=0
-ROOT_SRC=$(awk '$2=="/"{print $1}' /proc/mounts | head -n1)
+ROOT_SRC=$(awk '$2=="/"{print $1; exit}' /proc/mounts)
 case "$ROOT_SRC" in
 	/dev/mmcblk*)
 		BASE=${ROOT_SRC%%p*}
@@ -34,14 +34,15 @@ case "$ROOT_SRC" in
 		;;
 esac
 
-/usr/sbin/fram-set boot_media "$MEDIA" 2>/dev/null || true
+# Quiet: fram-set prints GraphQL; boot console only needs failures.
+/usr/sbin/fram-set boot_media "$MEDIA" >/dev/null 2>&1 || true
 
 # Compact image id from /etc/radsat-image-id if present (u64 decimal).
 if [ -f /etc/radsat-image-id ]; then
 	ID=$(awk 'NF{print $1; exit}' /etc/radsat-image-id)
 	case "$ID" in
 		''|*[!0-9]*) ;;
-		*) /usr/sbin/fram-set boot_image_id "$ID" 2>/dev/null || true ;;
+		*) /usr/sbin/fram-set boot_image_id "$ID" >/dev/null 2>&1 || true ;;
 	esac
 fi
 
