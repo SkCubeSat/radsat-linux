@@ -1,9 +1,8 @@
 #!/bin/sh
 #
 # Stamp ground-visible FRAM boot_media / boot_image_id once the system is
-# usable. Runs late (after fram-service). Comms health is preferred but we
-# still stamp media so ground can see which image is running once the link
-# comes up.
+# usable. Runs late (after fram-service). boot_count is incremented by
+# fram-service itself (dual-slot CRC), not here.
 #
 
 case "$1" in

@@ -35,13 +35,9 @@
 # Create /run/lock for fw_printenv/fw_setenv lock file (/var/lock -> ../run/lock)
 ::sysinit:/bin/mkdir -p /run/lock
 ::sysinit:/bin/chmod 1777 /run/lock
-# Mount Kubos volumes. /home and /envar live on the main SD image.
-# /upgrade and /home/microsd come from aux-sd.img (disk 41555820) and
-# are optional when only kubos-linux.img is flashed.
-::sysinit:/bin/mount /home
-::sysinit:/bin/sh -c 'mount /home/microsd 2>/dev/null || true'
-::sysinit:/bin/sh -c 'mount /upgrade 2>/dev/null || true'
-::sysinit:/bin/mount /envar
+# /envar is p3 of the root disk. Lab also mounts p4 on /home; flight
+# mounts p4 on /upgrade and leaves /home on the rootfs.
+::sysinit:/bin/sh /sbin/mount-root-parts
 # Repair /var/log -> /home/system/log (or tmpfs fallback) before monit/rsyslog
 ::sysinit:/sbin/ensure-system-log
 # Announce whether rootfs is on SD or eMMC (after mounts are real).

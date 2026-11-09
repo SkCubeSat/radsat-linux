@@ -13,9 +13,7 @@ KUBOS_MRAM_POST_INSTALL_TARGET_HOOKS += MRAM_INSTALL_INIT_SYSV
 define MRAM_BUILD_CMDS
 	cd $(KUBOS_DIR) && \
 	PATH=$(PATH):~/.cargo/bin && \
-	PKG_CONFIG_ALLOW_CROSS=1 \
-	CC=$(TARGET_CC) \
-	RUSTFLAGS="-Clinker=$(TARGET_CC)" \
+	$(KUBOS_CARGO_CROSS_ENV) \
 	BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$(STAGING_DIR)" \
 	cargo build --package mram-service --features spidev --target $(CARGO_TARGET) --release
 endef

@@ -1,0 +1,14 @@
+# Flight media: boot + rootfs + envar + upgrade only (no 3G /home, no aux-sd).
+# /sbin/mount-root-parts mounts p3 and p4 of the root disk.
+# /home stays on the rootfs — do NOT mount a partition on it or you hide
+# /home/system/kubos/log-rotate.sh.
+# <file system> <mount pt>  <type>  <options>   <dump>  <pass>
+/dev/root   /       ext2    rw,noauto   0   1
+proc        /proc       proc    defaults    0   0
+devpts      /dev/pts    devpts  defaults,gid=5,mode=620 0   0
+tmpfs       /dev/shm    tmpfs   mode=0777   0   0
+tmpfs       /tmp        tmpfs   mode=1777   0   0
+tmpfs       /run        tmpfs   mode=0755,nosuid,nodev  0   0
+sysfs       /sys        sysfs   defaults    0   0
+# root-disk p3 /envar
+# root-disk p4 /upgrade

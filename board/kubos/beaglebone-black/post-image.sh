@@ -8,7 +8,10 @@ BRANCH=$2
 OUTPUT=$(basename "${BASE_DIR}")
 
 GENIMAGE_CFG="${BOARD_DIR}/genimage.cfg"
+GENIMAGE_FLIGHT_CFG="${BOARD_DIR}/genimage-flight.cfg"
 GENIMAGE_TMP="${BUILD_DIR}/genimage.tmp"
+# Flight slim image is opt-in for now (lab image is the default deliverable).
+BUILD_FLIGHT_IMAGE="${BUILD_FLIGHT_IMAGE:-0}"
 
 rm -rf "${GENIMAGE_TMP}"
 
@@ -57,7 +60,7 @@ cd "${CURR_DIR}"
 # Size must match CONFIG_ENV_SIZE (0x2800 = 10240 bytes).
 dd if=/dev/zero of="${TARGET_DIR}/envar/uboot.env" bs=1 count=10240 2>/dev/null
 
-# Generate the images
+# Generate the lab/dev images (includes 3G /home + aux-sd)
 genimage \
     --rootpath "${TARGET_DIR}" \
     --tmppath "${GENIMAGE_TMP}" \
@@ -70,6 +73,45 @@ tar -czf "${BINARIES_DIR}/kubos-linux.tar.gz" \
     -C "${BINARIES_DIR}" kubos-linux.img
 tar -czf "${BINARIES_DIR}/aux-sd.tar.gz" \
     -C "${BINARIES_DIR}" aux-sd.img
+
+# Slim flight disk: boot + 256M rootfs + envar + 32M empty upgrade (~310M).
+# Lab aux-sd already packaged the kpacks; flight card stays golden/bootable only.
+if [ "${BUILD_FLIGHT_IMAGE}" = "1" ] && [ -f "${GENIMAGE_FLIGHT_CFG}" ]; then
+    FLIGHT_FSTAB="$(cd "${BOARD_DIR}" && pwd)/overlay-flight/etc/fstab"
+    if [ ! -f "${BINARIES_DIR}/rootfs.ext4" ]; then
+        echo "post-image: rootfs.ext4 missing; skipping flight image" >&2
+    elif [ ! -f "${FLIGHT_FSTAB}" ]; then
+        echo "post-image: ${FLIGHT_FSTAB} missing; skipping flight image" >&2
+    else
+        cp -f "${BINARIES_DIR}/rootfs.ext4" "${BINARIES_DIR}/rootfs-flight.ext4"
+        # Inject flight fstab into the copied rootfs (lab rootfs stays untouched).
+        debugfs -w -R "rm /etc/fstab" "${BINARIES_DIR}/rootfs-flight.ext4" || true
+        debugfs -w -R "write ${FLIGHT_FSTAB} /etc/fstab" \
+            "${BINARIES_DIR}/rootfs-flight.ext4"
+
+        # Keep p4 for U-Boot, but do not stuff multi-hundred-MB ITBs onto flight media.
+        mkdir -p "${TARGET_DIR}/upgrade" "${TARGET_DIR}/envar"
+        find "${TARGET_DIR}/upgrade" -mindepth 1 -maxdepth 1 -delete
+        dd if=/dev/zero of="${TARGET_DIR}/envar/uboot.env" bs=1 count=10240 2>/dev/null
+
+        rm -rf "${GENIMAGE_TMP}"
+        genimage \
+            --rootpath "${TARGET_DIR}" \
+            --tmppath "${GENIMAGE_TMP}" \
+            --inputpath "${BINARIES_DIR}" \
+            --outputpath "${BINARIES_DIR}" \
+            --config "${GENIMAGE_FLIGHT_CFG}"
+
+        tar -czf "${BINARIES_DIR}/kubos-linux-flight.tar.gz" \
+            -C "${BINARIES_DIR}" kubos-linux-flight.img
+        gzip -c -9 "${BINARIES_DIR}/kubos-linux-flight.img" \
+            > "${BINARIES_DIR}/kubos-linux-flight.img.gz"
+
+        rm -f "${BINARIES_DIR}/upgrade-flight"
+        rm -f "${BINARIES_DIR}/rootfs-flight.ext4"
+        rm -f "${BINARIES_DIR}/kubos-linux-flight.img"
+    fi
+fi
 
 # Clean up
 find "${TARGET_DIR}/upgrade" -mindepth 1 -maxdepth 1 -delete

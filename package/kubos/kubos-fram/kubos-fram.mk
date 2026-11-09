@@ -13,7 +13,7 @@ KUBOS_FRAM_POST_INSTALL_TARGET_HOOKS += FRAM_INSTALL_INIT_SYSV
 define FRAM_BUILD_CMDS
 	cd $(KUBOS_DIR) && \
 	PATH=$(PATH):~/.cargo/bin && \
-	PKG_CONFIG_ALLOW_CROSS=1 CC=$(TARGET_CC) RUSTFLAGS="-Clinker=$(TARGET_CC)" cargo build --package fram-service --features i2c --target $(CARGO_TARGET) --release
+	$(KUBOS_CARGO_CROSS_ENV) cargo build --package fram-service --features i2c --target $(CARGO_TARGET) --release
 endef
 
 # Generate the config settings for the service and add them to a fragment file

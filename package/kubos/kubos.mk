@@ -35,6 +35,23 @@ KUBOS_CARGO_TARGET_DIR = \
 	$(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),$(KUBOS_DIR)/target)
 KUBOS_CARGO_OUTPUT_DIR = $(KUBOS_CARGO_TARGET_DIR)/$(CARGO_TARGET)/release
 
+# Cross cargo builds still compile host build-scripts (e.g. psm/stacker).
+# Keep TARGET_CC for the crate link, but force host gcc for x86_64 build-scripts.
+# Do NOT use $(HOSTCC) here — Buildroot sets it to "ccache /usr/bin/gcc" (two
+# words), which breaks unquoted env assignments and runs gcc instead of cargo.
+# Use `env` so hyphenated CC_* names are legal (bash inline assign forbids '-').
+KUBOS_HOST_CC = /usr/bin/gcc
+KUBOS_CARGO_CROSS_ENV = \
+	env \
+	PKG_CONFIG_ALLOW_CROSS=1 \
+	CC=$(TARGET_CC) \
+	HOST_CC=$(KUBOS_HOST_CC) \
+	CC_x86_64-unknown-linux-gnu=$(KUBOS_HOST_CC) \
+	CC_x86_64_unknown_linux_gnu=$(KUBOS_HOST_CC) \
+	CFLAGS_x86_64-unknown-linux-gnu= \
+	CFLAGS_x86_64_unknown_linux_gnu= \
+	RUSTFLAGS="-Clinker=$(TARGET_CC)"
+
 KUBOS_BR_TARGET = $(lastword $(subst /, ,$(dir $(BR2_LINUX_KERNEL_CUSTOM_DTS_PATH))))
 ifeq ($(KUBOS_BR_TARGET),at91sam9g20isis)
 	KUBOS_TARGET = kubos-linux-isis-gcc

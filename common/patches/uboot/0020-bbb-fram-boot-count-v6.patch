@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Mon, 9 Nov 2026 09:10:00 -0600
+Subject: [PATCH] arm: bbb: FRAM v7 regroup + boot_count (key 9)
+
+Bump layout to v7 / RESERVED_KEYS=42. Regroup recovery keys so
+boot_count sits with total_boot_fails and emmc_restore_offset with
+the other eMMC restore state. Linux fram-service increments
+boot_count (A/B+CRC); U-Boot only needs matching key IDs / header.
+
+---
+--- a/common/fram_mission.c
++++ b/common/fram_mission.c
+@@ -24,9 +24,9 @@
+ #define FRAM_BOOT_POLICY_KEYS	6
+ #define FRAM_BOOT_DATA_END	(FRAM_BOOT_POLICY_KEYS * FRAM_SLOTS_PER_KEY * FRAM_RECORD_SIZE)
+ #define FRAM_LAYOUT_MAGIC	0x4D415246u	/* "FRAM" LE */
+-#define FRAM_LAYOUT_VERSION	5
++#define FRAM_LAYOUT_VERSION	7
+ #define FRAM_LAYOUT_VERSION_MIN	1
+-#define FRAM_LAYOUT_OFFSET	2624	/* RESERVED_KEYS=41 * 2 * 32 */
++#define FRAM_LAYOUT_OFFSET	2688	/* RESERVED_KEYS=42 * 2 * 32 */
+ #define FRAM_REC_MAGIC		0x4652
+ 
+ struct fram_key {
+@@ -38,11 +39,12 @@
+ #define FRAM_KEY_TOTAL_BOOT_FAILS	8
+-#define FRAM_KEY_EMMC_RECOVERY_NEEDED	9
+-#define FRAM_KEY_EMMC_RECOVERY_ATTEMPTS	10
+-#define FRAM_KEY_SD_RESTORE_SLOT	11
+-#define FRAM_KEY_LAST_EMMC_PROBE_OK	12
+-#define FRAM_KEY_BOOT_MEDIA		13
+-#define FRAM_KEY_BOOT_IMAGE_ID		14
+-#define FRAM_KEY_EMMC_RESTORE_OFFSET	40
++#define FRAM_KEY_BOOT_COUNT		9
++#define FRAM_KEY_EMMC_RECOVERY_NEEDED	10
++#define FRAM_KEY_EMMC_RECOVERY_ATTEMPTS	11
++#define FRAM_KEY_EMMC_RESTORE_OFFSET	12
++#define FRAM_KEY_SD_RESTORE_SLOT	13
++#define FRAM_KEY_LAST_EMMC_PROBE_OK	14
++#define FRAM_KEY_BOOT_MEDIA		15
++#define FRAM_KEY_BOOT_IMAGE_ID		16
+ #define FRAM_RECOVERY_ATTEMPT_CAP	5
+ 
+ int radsat_fram_recovery_needed(void);

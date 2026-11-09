@@ -1,17 +1,27 @@
-# RadSat FRAM mission flags (layout v5)
+# RadSat FRAM mission flags (layout v7)
 
-All of these **belong in FRAM** (dual-slot, power-cycle durable).  
-Put **bulk commissioning logs / dumps in MRAM** (`mram put …`), not FRAM.
+eMMC-only and lab-serial errors E1–E22 (PARTUUID, MRAM vs `fw_setenv`, recovery latch, `legacy_mmc0`, missing `distro_bootcmd`/`mmcboot`, fstab `PARTUUID` mounts):  
+[`EMMC_ROOT_PARTUUID.md`](EMMC_ROOT_PARTUUID.md). Blank-board bring-up: [`BLANK_BOARD.md`](BLANK_BOARD.md).
 
-U-Boot overlays boot-policy keys **1–6** into env.  
-U-Boot **reads/writes** recovery keys **8–14** and **40** (never as `bootcmd`).  
+All mission flags are **dual-slot (A/B)** with a **per-record CRC32**.  
+Writes mirror B then A with readback; reads pick any CRC-valid copy and  
+auto-repair the other. Put **bulk commissioning logs / dumps in MRAM**  
+(`mram put …`), not FRAM.
+
+U-Boot overlays boot-policy keys **1–6** into env (only if boot-region CRC  
+`boot_checksum` matches).  
+U-Boot **reads/writes** recovery keys **8–16** (never as `bootcmd`).  
 Consent / faults / counters / AES are **FRAM-only** (never `bootcmd`).
 
-Layout v4 **repacks** key IDs vs v2/v3 (recovery sits after boot policy).  
-Layout v5 adds `emmc_restore_offset` (id 40) for resumable SD→eMMC restore.  
-Prior chips are not binary-compatible — blank/reconcile or wipe + re-init.
+Layout v7 **regroups** recovery keys so related fields are contiguous  
+(`boot_count` next to `total_boot_fails`, `emmc_restore_offset` with the  
+other eMMC restore state). Prior chips are not binary-compatible —  
+blank/reconcile or wipe + re-init.
 
-`RESERVED_KEYS=41`. `LAYOUT_VERSION=5`.
+`RESERVED_KEYS=42`. `LAYOUT_VERSION=7`.
+
+`boot_count` is seeded to **0** on virgin reconcile / `initializeFlightState`,  
+then **+1** on every `fram-service` start (baked into Software, not an init script).
 
 ## Boot policy (ids 1–7)
 
@@ -25,50 +35,72 @@ Prior chips are not binary-compatible — blank/reconcile or wipe + re-init.
 | 6 | `detumbling_complete` | bool | boot |
 | 7 | `boot_checksum` | u64 | CRC trailer over keys 1–6 raw dual-slots |
 
-## Recovery + ground-visible boot state (ids 8–14, 40)
+## Boot health / recovery (ids 8–16)
 
 | id | name | type | notes |
 |----|------|------|-------|
 | 8 | `total_boot_fails` | u64 | lifetime; increment on eMMC probe/boot failure; **never clear** on healthy boot |
-| 9 | `emmc_recovery_needed` | bool | latch: force SD boot / restore until verified |
-| 10 | `emmc_recovery_attempts` | u64 | restore attempt counter (bumped only when offset==0) |
-| 11 | `sd_restore_slot` | u64 | which SD image slot to restore from |
-| 12 | `last_emmc_probe_ok` | bool | last U-Boot eMMC FAT/kernel probe |
-| 13 | `boot_media` | u64 | 0=eMMC, 1=SD primary, 2+=SD backup slot |
-| 14 | `boot_image_id` | u64 | compact image identity (stamped when usable) |
-| 40 | `emmc_restore_offset` | u64 | SD→eMMC copy resume sector; **0** = start/cleared |
+| 9 | `boot_count` | u64 | lifetime successful Linux boots; **+1** each `fram-service` start; seed **0** on new image |
+| 10 | `emmc_recovery_needed` | bool | latch: force SD boot / restore until verified |
+| 11 | `emmc_recovery_attempts` | u64 | restore attempt counter (bumped only when offset==0) |
+| 12 | `emmc_restore_offset` | u64 | SD→eMMC copy resume sector; **0** = start/cleared |
+| 13 | `sd_restore_slot` | u64 | which SD image slot to restore from |
+| 14 | `last_emmc_probe_ok` | bool | last U-Boot eMMC FAT/kernel probe |
+| 15 | `boot_media` | u64 | 0=eMMC, 1=SD primary, 2+=SD backup slot |
+| 16 | `boot_image_id` | u64 | compact image identity (stamped when usable) |
 
-## Mission / consent / faults / counters / AES (ids 15–39)
+## One-time deploy / completion (ids 17–20)
 
 | id | name | type |
 |----|------|------|
-| 15 | `solar_panel_deployed` | bool |
-| 16 | `uhf_antenna_deployed` | bool |
-| 17 | `vhf_antenna_deployed` | bool |
-| 18 | `adcs_commissioning_logged` | bool |
-| 19 | `adcs_commissioned` | bool |
-| 20 | `sun_pointing_consent` | bool |
-| 21 | `nadir_pointing_consent` | bool |
-| 22 | `platform_commissioned` | bool |
-| 23 | `gnss_system_error` | bool |
-| 24–25 | `gyro0_fail`, `gyro1_fail` | bool |
-| 26–27 | `mag0_fail`, `mag1_fail` | bool |
-| 28 | `reaction_wheel_fail` | bool |
-| 29 | `sun_sensor_fail` | bool |
-| 30 | `earth_sensor_fail` | bool |
-| 31–32 | `sun_pointing_angle_fault`, `sun_pointing_rate_fault` | bool |
-| 33–34 | `nadir_pointing_angle_fault`, `nadir_pointing_rate_fault` | bool |
-| 35 | `antenna_deploy_attempts` | u64 |
-| 36 | `solar_panel_deploy_attempts` | u64 |
-| 37 | `nadir_point_attempts` | u64 |
-| 38 | `sun_point_attempts` | u64 |
-| 39 | `comms_uplink_aes128_key` | bytes | write-once AES-128; never U-Boot-mirrored |
+| 17 | `solar_panel_deployed` | bool |
+| 18 | `uhf_antenna_deployed` | bool |
+| 19 | `vhf_antenna_deployed` | bool |
+| 20 | `adcs_commissioning_logged` | bool |
+
+## Ground consent (ids 21–24)
+
+| id | name | type |
+|----|------|------|
+| 21 | `adcs_commissioned` | bool |
+| 22 | `sun_pointing_consent` | bool |
+| 23 | `nadir_pointing_consent` | bool |
+| 24 | `platform_commissioned` | bool |
+
+## Failure trip flags (ids 25–36)
+
+| id | name | type |
+|----|------|------|
+| 25 | `gnss_system_error` | bool |
+| 26–27 | `gyro0_fail`, `gyro1_fail` | bool |
+| 28–29 | `mag0_fail`, `mag1_fail` | bool |
+| 30 | `reaction_wheel_fail` | bool |
+| 31 | `sun_sensor_fail` | bool |
+| 32 | `earth_sensor_fail` | bool |
+| 33–34 | `sun_pointing_angle_fault`, `sun_pointing_rate_fault` | bool |
+| 35–36 | `nadir_pointing_angle_fault`, `nadir_pointing_rate_fault` | bool |
+
+## Attempt counters (ids 37–40)
+
+| id | name | type |
+|----|------|------|
+| 37 | `antenna_deploy_attempts` | u64 |
+| 38 | `solar_panel_deploy_attempts` | u64 |
+| 39 | `nadir_point_attempts` | u64 |
+| 40 | `sun_point_attempts` | u64 |
+
+## Crypto (id 41)
+
+| id | name | type | notes |
+|----|------|------|-------|
+| 41 | `comms_uplink_aes128_key` | bytes | write-once AES-128; never U-Boot-mirrored |
 
 ## CLI
 
 ```sh
 fram-get
 fram-get total_boot_fails
+fram-get boot_count
 fram-get boot_media
 fram-get emmc_restore_offset
 fram-set emmc_recovery_needed true

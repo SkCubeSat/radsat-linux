@@ -13,7 +13,7 @@ when starting from offset 0.
 ---
 --- a/common/fram_mission.c
 +++ b/common/fram_mission.c
-@@ -24,9 +24,10 @@
+@@ -24,9 +24,9 @@
  #define FRAM_BOOT_POLICY_KEYS	6
  #define FRAM_BOOT_DATA_END	(FRAM_BOOT_POLICY_KEYS * FRAM_SLOTS_PER_KEY * FRAM_RECORD_SIZE)
  #define FRAM_LAYOUT_MAGIC	0x4D415246u	/* "FRAM" LE */
@@ -33,7 +33,7 @@ when starting from offset 0.
  #define FRAM_RECOVERY_ATTEMPT_CAP	5
  
  int radsat_fram_recovery_needed(void);
-@@ -177,12 +179,14 @@
+@@ -177,13 +179,20 @@
  
  static int radsat_emmc_probe(void)
  {
@@ -57,7 +57,7 @@ when starting from offset 0.
  	return -1;
  }
  
-@@ -218,46 +222,75 @@
+@@ -218,49 +222,68 @@
  int radsat_fram_run_recovery(void)
  {
  	unsigned int old_bus = i2c_get_bus_num();
@@ -134,7 +134,7 @@ when starting from offset 0.
  		return -1;
  	}
  
-@@ -272,7 +305,9 @@
+@@ -272,9 +305,10 @@
  	if (i2c_set_bus_num(CONFIG_FRAM_I2C_BUS) == 0) {
  		fram_set_bool(FRAM_KEY_EMMC_RECOVERY_NEEDED, 0);
  		fram_set_bool(FRAM_KEY_LAST_EMMC_PROBE_OK, 1);

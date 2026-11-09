@@ -5,7 +5,7 @@ URL="${FRAM_URL:-http://127.0.0.1:8091/}"
 NAME="${1:-}"
 
 if [ -z "$NAME" ]; then
-  PAYLOAD='{"query":"{ missionState { removeBeforeFlight deployed deployStart initialSafeStateComplete fsooTimer detumblingComplete bootChecksum totalBootFails emmcRecoveryNeeded emmcRecoveryAttempts sdRestoreSlot lastEmmcProbeOk bootMedia bootImageId emmcRestoreOffset solarPanelDeployed uhfAntennaDeployed vhfAntennaDeployed adcsCommissioningLogged adcsCommissioned sunPointingConsent nadirPointingConsent platformCommissioned gnssSystemError gyro0Fail gyro1Fail mag0Fail mag1Fail reactionWheelFail sunSensorFail earthSensorFail sunPointingAngleFault sunPointingRateFault nadirPointingAngleFault nadirPointingRateFault antennaDeployAttempts solarPanelDeployAttempts nadirPointAttempts sunPointAttempts } memoryMap { layoutMagic layoutVersion } }"}'
+  PAYLOAD='{"query":"{ missionState { removeBeforeFlight deployed deployStart initialSafeStateComplete fsooTimer detumblingComplete bootChecksum totalBootFails bootCount emmcRecoveryNeeded emmcRecoveryAttempts emmcRestoreOffset sdRestoreSlot lastEmmcProbeOk bootMedia bootImageId solarPanelDeployed uhfAntennaDeployed vhfAntennaDeployed adcsCommissioningLogged adcsCommissioned sunPointingConsent nadirPointingConsent platformCommissioned gnssSystemError gyro0Fail gyro1Fail mag0Fail mag1Fail reactionWheelFail sunSensorFail earthSensorFail sunPointingAngleFault sunPointingRateFault nadirPointingAngleFault nadirPointingRateFault antennaDeployAttempts solarPanelDeployAttempts nadirPointAttempts sunPointAttempts } memoryMap { layoutMagic layoutVersion } }"}'
 else
   # JSON-escape backslashes and quotes in the name
   ESC=$(printf '%s' "$NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')

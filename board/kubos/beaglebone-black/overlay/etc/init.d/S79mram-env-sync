@@ -3,19 +3,35 @@
 # S79mram-env-sync — Mirror CRC-valid U-Boot env from SPI MRAM to /envar/uboot.env
 # so fw_printenv/fw_setenv keep working. Runs before fram-service (S80).
 #
+# Blank / never-seeded MRAM: auto --seed a Kubos-safe env (bootcmd=run distro_bootcmd)
+# so virgin boards boot without a manual mram-env-sync step.
+#
 
 ENVAR_FILE="/envar/uboot.env"
 SYNC="/usr/sbin/mram-env-sync"
+DEVICE="/dev/spidev1.0"
 
 case "$1" in
   start)
     mkdir -p /run/lock /envar
     chmod 1777 /run/lock 2>/dev/null || true
-    if [ -x "$SYNC" ]; then
-      echo "S79mram-env-sync: syncing MRAM env -> ${ENVAR_FILE}"
-      "$SYNC" --backend spidev --device /dev/spidev1.0 --out "$ENVAR_FILE" || true
-    else
+    if [ ! -x "$SYNC" ]; then
       echo "S79mram-env-sync: ${SYNC} missing; leaving ${ENVAR_FILE}"
+      exit 0
+    fi
+    if [ ! -c "$DEVICE" ]; then
+      echo "S79mram-env-sync: ${DEVICE} missing; leaving ${ENVAR_FILE}"
+      exit 0
+    fi
+
+    echo "S79mram-env-sync: syncing MRAM env -> ${ENVAR_FILE}"
+    if ! "$SYNC" --backend spidev --device "$DEVICE" --out "$ENVAR_FILE"; then
+      echo "S79mram-env-sync: MRAM CRC/env invalid; seeding Kubos-safe bootcmd"
+      if "$SYNC" --seed --backend spidev --device "$DEVICE" --out "$ENVAR_FILE"; then
+        echo "S79mram-env-sync: seed OK"
+      else
+        echo "S79mram-env-sync: seed FAILED (board may still boot from compiled-in defaults)"
+      fi
     fi
     ;;
   stop)

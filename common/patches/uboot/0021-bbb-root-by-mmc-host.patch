@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Mon, 9 Nov 2026 11:10:00 -0600
+Subject: [PATCH] arm: bbb: boot Linux by mmc host, not PARTUUID
+
+Linux 4.4 names the SD slot mmcblk0 and the eMMC mmcblk1 (host index).
+part uuid on these MBRs does not match the PARTUUID the kernel publishes,
+so root=PARTUUID=4b4c4e59-02 waits forever even after both cards enumerate.
+
+Pass root=/dev/mmcblk${mmcdev}p2. mmcdev 0 is the SD card, 1 is the eMMC,
+and partition 2 is the rootfs on both images.
+
+Saved MRAM envs still carry the old args_mmc, and a loaded env replaces
+the compiled-in default. board_late_init overwrites args_mmc on every
+boot so an old env cannot put PARTUUID back on the command line.
+
+---
+ board/ti/am335x/board.c            |  8 ++++++++
+ include/configs/beaglebone-black.h |  6 +++---
+ 2 files changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/board/ti/am335x/board.c b/board/ti/am335x/board.c
+--- a/board/ti/am335x/board.c
++++ b/board/ti/am335x/board.c
+@@ -583,6 +583,14 @@ int board_late_init(void)
+ 			setenv("boot_targets", "legacy_mmc0");
+ 		}
+ 	}
++	/*
++	 * Override a saved args_mmc. mmc0 is the SD slot, mmc1 is eMMC,
++	 * and Linux names them mmcblk0 and mmcblk1 to match.
++	 */
++	setenv("args_mmc",
++	       "setenv bootargs console=ttyS0,115200 ${optargs} "
++	       "root=/dev/mmcblk${mmcdev}p2 ro rootfstype=ext4 rootwait");
+ #endif
+ #ifdef CONFIG_ENV_VARS_UBOOT_RUNTIME_CONFIG
+ 	int rc;
+diff --git a/include/configs/beaglebone-black.h b/include/configs/beaglebone-black.h
+--- a/include/configs/beaglebone-black.h
++++ b/include/configs/beaglebone-black.h
+@@ -97,10 +97,10 @@
+     "mmcdev=0\0" \
+     "mmcrootfstype=ext4 rootwait\0" \
+     "finduuid=part uuid mmc ${bootpart} uuid\0" \
+-    "args_mmc=run finduuid;setenv bootargs console=ttyS0,115200 " \
++    "args_mmc=setenv bootargs console=ttyS0,115200 " \
+         "${optargs} " \
+-        "root=PARTUUID=${uuid} ro " \
+-        "rootfstype=${mmcrootfstype}\0" \
++        "root=/dev/mmcblk${mmcdev}p2 ro " \
++        "rootfstype=ext4 rootwait\0" \
+     "bootfile=kernel\0" \
+     "console=ttyS0,115200\0" \
+     "optargs=\0" \

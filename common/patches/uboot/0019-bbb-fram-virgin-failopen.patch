@@ -1,0 +1,53 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Mon, 9 Nov 2026 09:00:00 -0600
+Subject: [PATCH] arm: bbb: virgin FRAM fail-open (no eMMC restore hang)
+
+Blank / never-commissioned boards often have empty eMMC. The v4/v5
+recovery path latched on any eMMC probe miss and kicked a ~768MB
+chunked SD->eMMC copy that looks like a hung boot.
+
+Virgin FRAM (blank layout header before first stamp): do not latch
+recovery and do not run U-Boot raw restore. Boot via distro targets
+(SD works). Explicit FRAM recovery latch from a prior healthy eMMC
+still triggers restore/SD fallback.
+
+---
+--- a/common/fram_mission.c
++++ b/common/fram_mission.c
+@@ -189,19 +189,35 @@
+ int radsat_fram_recovery_needed(void)
+ {
+ 	unsigned int old_bus = i2c_get_bus_num();
+ 	int needed = 0;
+ 	int probe_ok;
++	int virgin;
+ 
+ 	if (i2c_set_bus_num(CONFIG_FRAM_I2C_BUS))
+ 		return 0;
+ 
++	/*
++	 * Detect virgin chip *before* fram_ensure_layout_header() stamps
++	 * the magic — otherwise every blank board looks "initialized".
++	 */
++	virgin = (fram_region_blank(FRAM_LAYOUT_OFFSET, 16) == 1);
++
+ 	fram_ensure_layout_header();
+ 
+ 	probe_ok = (radsat_emmc_probe() == 0);
+ 	fram_set_bool(FRAM_KEY_LAST_EMMC_PROBE_OK, probe_ok ? 1 : 0);
+ 
++	if (virgin) {
++		puts("FRAM: virgin board; skipping recovery latch/restore\n");
++		/* Leave emmc_recovery_needed clear; Linux install-os can set it later. */
++		fram_set_bool(FRAM_KEY_EMMC_RECOVERY_NEEDED, 0);
++		fram_set_u64(FRAM_KEY_EMMC_RESTORE_OFFSET, 0);
++		i2c_set_bus_num(old_bus);
++		return 0;
++	}
++
+ 	if (!probe_ok) {
+ 		puts("FRAM: eMMC probe failed; latching recovery\n");
+ 		fram_bump_u64(FRAM_KEY_TOTAL_BOOT_FAILS);
+ 		fram_set_bool(FRAM_KEY_EMMC_RECOVERY_NEEDED, 1);
+ 		needed = 1;

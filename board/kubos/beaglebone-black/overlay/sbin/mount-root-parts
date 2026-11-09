@@ -1,0 +1,60 @@
+#!/bin/sh
+# Mount the data partitions that belong to the disk we actually rooted from.
+#
+# BusyBox mount is built without FEATURE_MOUNT_LABEL, so fstab lines of the
+# form PARTUUID=... never resolve. mmcblk numbers are the MMC host index
+# (mmc0 = SD, mmc1 = eMMC), but the root device is the one reliable handle:
+# its p3 is /envar, and p4 is whichever mount the image's fstab names.
+#
+# Optional aux-sd (disk signature 0x41555820) supplies /upgrade and
+# /home/microsd when that card is present.
+set +e
+
+root=$(awk '$2 == "/" { print $1; exit }' /proc/mounts)
+case "$root" in
+/dev/mmcblk*p*)
+	base=${root%p*}
+	;;
+*)
+	echo "mount-root-parts: root is '${root:-unknown}'"
+	exit 0
+	;;
+esac
+
+mount_one() {
+	_dev=$1
+	_mnt=$2
+	[ -b "$_dev" ] || return 0
+	awk -v m="$_mnt" '$2 == m { found = 1 } END { exit !found }' /proc/mounts && return 0
+	mkdir -p "$_mnt"
+	if mount -t ext4 -o defaults "$_dev" "$_mnt"; then
+		echo "mount-root-parts: $_dev -> $_mnt"
+	else
+		echo "mount-root-parts: $_dev -> $_mnt failed"
+	fi
+}
+
+# p3 is /envar on both the lab image and the flight image.
+mount_one "${base}p3" /envar
+
+# Lab puts the big partition on /home. Flight puts it on /upgrade and
+# leaves /home on the rootfs. A non-comment /home line is the lab image,
+# including an older fstab that still says PARTUUID=... /home.
+if grep -q 'root-disk p4 /home' /etc/fstab 2>/dev/null \
+	|| grep -Eq '^[^#].*[[:space:]]/home[[:space:]]' /etc/fstab 2>/dev/null; then
+	mount_one "${base}p4" /home
+elif grep -q 'root-disk p4 /upgrade' /etc/fstab 2>/dev/null; then
+	mount_one "${base}p4" /upgrade
+fi
+
+# Aux card: signature bytes are little-endian 0x41555820.
+for _disk in /dev/mmcblk[0-9]; do
+	[ -b "$_disk" ] || continue
+	_raw=$(dd if="$_disk" bs=1 skip=440 count=4 2>/dev/null | hexdump -v -e '1/1 "%02x"')
+	_sig=$(printf '%s' "$_raw" | sed -n 's/^\(..\)\(..\)\(..\)\(..\)$/\4\3\2\1/p')
+	[ "$_sig" = "41555820" ] || continue
+	grep -q '/home/microsd' /etc/fstab 2>/dev/null && mount_one "${_disk}p2" /home/microsd
+	grep -q 'aux-disk 41555820 p1 /upgrade' /etc/fstab 2>/dev/null && mount_one "${_disk}p1" /upgrade
+done
+
+exit 0

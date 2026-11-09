@@ -302,17 +302,3 @@ successful eMMC probe so power loss mid-copy still boots SD.
  #endif
  #ifdef CONFIG_ENV_VARS_UBOOT_RUNTIME_CONFIG
  	int rc;
---- a/include/configs/beaglebone-black.h
-+++ b/include/configs/beaglebone-black.h
-@@ -95,9 +95,10 @@
- #define CONFIG_BOOTCOMMAND \
-     "run distro_bootcmd"
- 
--/* Flight: eMMC only (no SD boot target). */
-+/* Flight: eMMC default. SD remains available for FRAM-latched recovery. */
- #define BOOT_TARGET_DEVICES(func) \
-     func(LEGACY_MMC, legacy_mmc, 1) \
-+    func(LEGACY_MMC, legacy_mmc, 0) \
- 
- #ifndef CONFIG_SPL_BUILD
- #define CONFIG_EXTRA_ENV_SETTINGS \

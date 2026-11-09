@@ -86,9 +86,13 @@ sync_one common/patches/uboot/0015-bbb-spi1-pindir-d0-in-d1-out.patch
 sync_one common/patches/uboot/0016-bbb-mram-env-import-polarity.patch
 sync_one common/patches/uboot/0017-bbb-fram-recovery-boot.patch
 sync_one common/patches/uboot/0018-bbb-fram-restore-resume.patch
+sync_one common/patches/uboot/0019-bbb-fram-virgin-failopen.patch
+sync_one common/patches/uboot/0020-bbb-fram-boot-count-v6.patch
+sync_one common/patches/uboot/0021-bbb-root-by-mmc-host.patch
 sync_one common/patches/linux/0006-arm-omap-am33xx-watchdog-restart.patch
 sync_one common/patches/linux/0007-i2c-omap-force-restart.patch
 sync_one common/patches/linux/0008-watchdog-quiet-restart-nowayout.patch
+sync_one common/patches/linux/0009-mmc-block-name-by-host-index.patch
 sync_one board/kubos/beaglebone-black/overlay/etc/init.d/S92radsat-boot-stamp
 sync_one board/kubos/beaglebone-black/overlay/etc/radsat-image-id
 sync_one deploy/FRAM_FLAGS.md
@@ -208,6 +212,13 @@ gzip -c -9 "$OUT/images/kubos-linux.img" > "$OUT/images/kubos-linux.img.gz"
 cp -v "$OUT/images/kubos-linux.img.gz" /mnt/c/Users/logan/CubeSAT/kubos-linux.img.gz
 ls -lh "$OUT/images/kubos-linux.img.gz" /mnt/c/Users/logan/CubeSAT/kubos-linux.img.gz
 sha256sum "$OUT/images/kubos-linux.img.gz" | tee -a "$LOG"
+if [[ -f "$OUT/images/kubos-linux-flight.img.gz" ]]; then
+  cp -v "$OUT/images/kubos-linux-flight.img.gz" \
+    /mnt/c/Users/logan/CubeSAT/kubos-linux-flight.img.gz
+  ls -lh "$OUT/images/kubos-linux-flight.img.gz" \
+    /mnt/c/Users/logan/CubeSAT/kubos-linux-flight.img.gz
+  sha256sum "$OUT/images/kubos-linux-flight.img.gz" | tee -a "$LOG"
+fi
 # Quick sanity: install-os has basename fallback / no pv byte multiply
 grep -q 'basename()' "$OUT/target/usr/sbin/install-os"
 grep -q 'overflows on 32-bit ash' "$OUT/target/usr/sbin/install-os"

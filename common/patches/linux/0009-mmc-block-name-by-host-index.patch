@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Radsat Developers <dev@radsat.local>
+Date: Mon, 9 Nov 2026 11:10:00 -0600
+Subject: [PATCH] mmc: block: name mmcblk after the host index
+
+mmcblkN was the order cards finished probing. With an SD card and
+eMMC both present, the eMMC became mmcblk0 whenever it won the race,
+so root=/dev/mmcblk1p2 and the data-partition mounts pointed at the
+wrong disk.
+
+Name the main block device from the host ("mmc0" -> mmcblk0,
+"mmc1" -> mmcblk1). Minor numbers stay first-free, which this driver
+already allows to differ from the name index.
+
+---
+ drivers/mmc/card/block.c | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/mmc/card/block.c b/drivers/mmc/card/block.c
+--- a/drivers/mmc/card/block.c
++++ b/drivers/mmc/card/block.c
+@@ -2214,8 +2214,20 @@ static struct mmc_blk_data *mmc_blk_alloc_req(struct mmc_card *card,
+ 	 * index anymore so we keep track of a name index.
+ 	 */
+ 	if (!subname) {
+-		md->name_idx = find_first_zero_bit(name_use, max_devices);
+-		__set_bit(md->name_idx, name_use);
++		const char *host = mmc_hostname(card->host);
++		int host_idx = -1;
++
++		if (host && sscanf(host, "mmc%d", &host_idx) == 1 &&
++		    host_idx >= 0 && host_idx < max_devices &&
++		    !test_bit(host_idx, name_use))
++			md->name_idx = host_idx;
++		else
++			md->name_idx = find_first_zero_bit(name_use,
++							   max_devices);
++		if (md->name_idx >= max_devices) {
++			ret = -ENOSPC;
++			goto err_kfree;
++		}
++		__set_bit(md->name_idx, name_use);
+ 	} else
+ 		md->name_idx = ((struct mmc_blk_data *)
+ 				dev_to_disk(parent)->private_data)->name_idx;
